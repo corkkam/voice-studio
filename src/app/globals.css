@@ -1,0 +1,124 @@
+@import 'tailwindcss';
+
+/*
+ * Voice Studio design tokens.
+ *
+ * Two palettes live side by side rather than as light/dark variants of one:
+ * the build surfaces (agents, builder, campaign) are always paper, and the
+ * ops surfaces (live monitor, call detail) are always dark. That is a
+ * deliberate product decision from the mockups, not a user preference — an
+ * operator watching 128 live calls at 2am gets the dark room either way.
+ */
+@theme {
+  --font-sans: var(--font-instrument-sans), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  /* paper surfaces */
+  --color-shell: #efece7;
+  --color-canvas: #f6f4f1;
+  --color-panel: #ffffff;
+  --color-panel-2: #faf8f5;
+  --color-panel-3: #fcfbf9;
+  --color-nav: #f0ece6;
+
+  --color-line: #e6e1da;
+  --color-line-2: #e2ddd5;
+  --color-line-3: #eee9e2;
+  --color-line-4: #f2eee8;
+  --color-line-5: #f4f1ec;
+
+  --color-ink: #1c1917;
+  --color-ink-2: #3a352f;
+  --color-ink-3: #57504a;
+  --color-muted: #78706a;
+  --color-muted-2: #8a8177;
+  --color-muted-3: #9a9188;
+  --color-muted-4: #a09488;
+  --color-faint: #b8afa4;
+  --color-faint-2: #c9c0b6;
+  --color-faint-3: #cec5b8;
+
+  --color-accent: #e4572e;
+  --color-accent-deep: #c2451f;
+  --color-accent-soft: #f0a58c;
+  --color-accent-tint: #fdf3ef;
+  --color-accent-tint-2: #fdf6f2;
+  --color-accent-line: #f2ddd3;
+
+  --color-good: oklch(0.55 0.13 172);
+  --color-good-deep: oklch(0.45 0.12 172);
+  --color-good-tint: #f7faf9;
+  --color-good-line: #eef2f0;
+  --color-amber: oklch(0.62 0.15 55);
+
+  /* ops surfaces */
+  --color-ops-bg: #16130f;
+  --color-ops-nav: #100e0b;
+  --color-ops-panel: #1c1814;
+  --color-ops-panel-2: #191511;
+  --color-ops-panel-3: #1a1613;
+  --color-ops-panel-4: #131110;
+  --color-ops-raised: #221d18;
+  --color-ops-selected: #1f1a15;
+
+  --color-ops-line: #2a251f;
+  --color-ops-line-2: #241f1a;
+  --color-ops-line-3: #1e1a16;
+  --color-ops-border: #302a23;
+
+  --color-ops-ink: #f4f1ec;
+  --color-ops-ink-2: #d8d0c6;
+  --color-ops-ink-3: #c4bbb1;
+  --color-ops-muted: #9a9188;
+  --color-ops-muted-2: #8b8279;
+  --color-ops-muted-3: #8f857b;
+  --color-ops-faint: #7a7169;
+  --color-ops-faint-2: #5f584f;
+  --color-ops-faint-3: #4a443c;
+
+  --color-ops-alert-bg: #241812;
+  --color-ops-alert-line: #4a2f22;
+  --color-ops-alert-panel: #1f1712;
+  --color-ops-good: oklch(0.7 0.14 172);
+  --color-ops-good-2: oklch(0.75 0.13 172);
+  --color-ops-good-bg: #13201b;
+  --color-ops-good-line: #1e3830;
+  --color-ops-caller: #8ba39a;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-shell);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The monospace numerals carry most of the meaning on these screens — latency,
+ * cost, counts — so they get tabular figures everywhere to stop columns from
+ * shivering as values tick.
+ */
+.font-mono,
+[class*='font-mono'] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ops surfaces get a dark scrollbar so the chrome does not flash white. */
+[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
