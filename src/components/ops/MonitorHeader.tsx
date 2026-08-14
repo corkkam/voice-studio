@@ -76,7 +76,7 @@ export function MonitorHeader({
           Live calls
         </h1>
         <p className="mt-1 font-sans text-[11px] leading-none text-ops-muted-2">
-          Collections — Aug W2 · 9:00–18:00 IST window
+          Live SDK and studio sessions · subscribe, do not poll
         </p>
       </div>
 
@@ -105,12 +105,7 @@ export function MonitorHeader({
           )
         })}
 
-        <button
-          type="button"
-          className="rounded-[5px] bg-accent px-[11px] py-[7px] font-sans text-[11px] leading-none font-semibold text-ops-bg"
-        >
-          Pause dialer
-        </button>
+
       </div>
     </header>
   )

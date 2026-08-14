@@ -19,7 +19,7 @@ const BUILD: Node[] = [
   },
   {
     id: '1b',
-    href: '/agents/loan-collections',
+    href: '/agents',
     title: 'Agent builder',
     body: 'Prompt, pipeline router, tools, turn taking. Test call runs in the right rail without leaving.',
     tone: 'active',
@@ -29,7 +29,7 @@ const BUILD: Node[] = [
 const RUN_ENTRIES: Node[] = [
   {
     id: '1e',
-    href: '/campaigns/collections-aug-w2',
+    href: '/campaigns',
     title: 'Outbound campaign',
     body: 'Compliance gate must pass before the dialer starts.',
   },
@@ -50,7 +50,7 @@ const RUN_DEPTHS: Node[] = [
   },
   {
     id: '1d',
-    href: '/calls/call_01K9ZQ4M',
+    href: '/calls',
     title: 'Call detail',
     body: 'Opened from a live card, the ended-calls strip, or a campaign row. Transcript + OTel spans.',
     tone: 'ops',
@@ -79,7 +79,7 @@ const FOOTNOTES = [
   },
   {
     title: 'NOT YET DESIGNED',
-    body: 'Voice library, Numbers & SIP, Evals, Keys & billing, and the interview module have nav slots and entry points but no screens yet.',
+    body: 'Voice library, Numbers & SIP, Evals, and the interview module have nav slots and entry points but no screens yet. Keys is live.',
   },
 ]
 
@@ -163,7 +163,7 @@ export default function ArchitecturePage() {
                   <div className="font-sans text-[12.5px] leading-[1.2] font-semibold text-accent-deep">
                     Back to the builder{' '}
                     <Link
-                      href="/agents/loan-collections"
+                      href="/agents"
                       className="rounded-[5px] bg-[#f7e2d9] px-[7px] py-[3px] font-mono text-[10.5px] font-semibold text-accent-deep"
                     >
                       1b

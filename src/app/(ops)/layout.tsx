@@ -1,19 +1,19 @@
 import { OpsSideNav } from '@/components/shell/SideNav'
-import { FleetProvider } from '@/lib/fleet'
+import { requireAuth } from '@/lib/auth/session'
+import { RuntimeProvider } from '@/lib/runtime'
+import { getSnapshot } from '@/lib/store/calls'
+import { toWorkspace } from '@/lib/workspace'
 
-/**
- * Ops shell — the run surfaces, always dark regardless of OS preference.
- *
- * `data-theme="dark"` gives thinking-orbs its light ink, and sets
- * `color-scheme` so form chrome and scrollbars stop flashing white.
- */
-export default function OpsLayout({ children }: { children: React.ReactNode }) {
+export const dynamic = 'force-dynamic'
+
+export default async function OpsLayout({ children }: { children: React.ReactNode }) {
+  const auth = await requireAuth()
   return (
-    <FleetProvider>
+    <RuntimeProvider workspace={toWorkspace(auth)} initial={getSnapshot(auth.tenant.id)}>
       <div data-theme="dark" className="flex h-screen bg-ops-bg">
         <OpsSideNav />
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </div>
-    </FleetProvider>
+    </RuntimeProvider>
   )
 }
