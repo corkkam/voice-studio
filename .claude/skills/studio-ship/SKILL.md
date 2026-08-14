@@ -50,8 +50,8 @@ git push -u origin HEAD
 Feature branches start from `dev` and PR back into `dev`. Never commit or push directly
 to `dev` or `main`, never auto-merge. Use a worktree rather than switching in place;
 several agents share this repo. Open the PR with the `file-pr` skill and watch it with
-`babysit-pr`. End the PR description with the model and harness line. No ticket yet:
-create one on Linear team Corkkam, never invent an id. Delete the branch after merge.
+`babysit-pr`. End the PR description with the model and harness line. A Linear ticket is
+not required and nothing waits on one; never invent an id. Delete the branch after merge.
 
 ## Cutting a version
 

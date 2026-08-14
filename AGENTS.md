@@ -209,8 +209,10 @@ feature/COR-123-thing  ->  dev  ->  main
 
 - **`main` is production truth.** Only a release PR from `dev` lands here.
 - **`dev` is the default branch** and where day-to-day work integrates.
-- Branch name `<feature|bug>/<COR-###>-<kebab-description>`. No ticket: create one on
-  Linear team Corkkam, never invent an id.
+- Branch name `<feature|bug>/<kebab-description>`. **A Linear ticket is not required**, and
+  no work waits on one. Add a `COR-###` segment only when a ticket already exists. Never
+  invent an id, and never create a ticket just to satisfy the format. The PR description
+  is where the change gets explained.
 - Never commit or push directly to `dev` or `main`. Branch, push the branch, open the
   PR with the `file-pr` skill.
 - Use a worktree for branch work rather than switching in place; several agents share
