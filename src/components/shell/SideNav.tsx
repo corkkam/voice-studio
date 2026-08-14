@@ -2,10 +2,8 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { MEDIA_PLANE } from '@/lib/data/agents'
-import { DIALER_STATS, OPS_HEALTH } from '@/lib/data/calls'
-import { TOTAL_LIVE } from '@/lib/data/callStore'
 import { useFleet, utilColor } from '@/lib/fleet'
+import { useLiveFeed } from '@/lib/runtime'
 
 interface NavItem {
   label: string
@@ -33,8 +31,8 @@ const PAPER_NAV: NavGroup[] = [
     title: 'RUN',
     items: [
       { label: 'Numbers & SIP', pending: true },
-      { label: 'Campaigns', href: '/campaigns/collections-aug-w2' },
-      { label: 'Calls', href: '/calls', badge: TOTAL_LIVE },
+      { label: 'Campaigns', href: '/campaigns' },
+      { label: 'Calls', href: '/calls' },
     ],
   },
   {
@@ -42,16 +40,16 @@ const PAPER_NAV: NavGroup[] = [
     items: [
       { label: 'Evals', pending: true },
       { label: 'Compliance', pending: true },
-      { label: 'Keys & billing', pending: true },
+      { label: 'Keys', href: '/keys' },
     ],
   },
 ]
 
 const OPS_NAV: NavItem[] = [
   { label: 'Agents', href: '/agents' },
-  { label: 'Campaigns', href: '/campaigns/collections-aug-w2' },
-  { label: 'Live calls', href: '/calls', badge: TOTAL_LIVE },
-  { label: 'Call history', href: '/calls/call_01K9ZQ4M' },
+  { label: 'Campaigns', href: '/campaigns' },
+  { label: 'Live calls', href: '/calls' },
+  { label: 'Keys', href: '/keys' },
   { label: 'Evals', pending: true },
 ]
 
@@ -82,6 +80,7 @@ function isActive(pathname: string, href?: string) {
 /** Paper-surface nav — the studio's canonical Build / Run / Trust spine. */
 export function PaperSideNav() {
   const pathname = usePathname()
+  const { liveCount } = useLiveFeed()
 
   return (
     <nav className="flex w-[214px] flex-none flex-col gap-[18px] border-r border-line-2 bg-nav p-[14px_12px]">
@@ -94,6 +93,7 @@ export function PaperSideNav() {
               {group.title}
             </div>
             {group.items.map((item) => {
+              const badge = item.href === '/calls' ? liveCount : item.badge
               const active = isActive(pathname, item.href)
               const body = (
                 <>
@@ -105,10 +105,10 @@ export function PaperSideNav() {
                     />
                     {item.label}
                   </span>
-                  {item.badge ? (
+                  {badge ? (
                     <span className="flex items-center gap-[5px] font-mono text-[9.5px] leading-none font-semibold text-accent-deep">
                       <span className="h-[5px] w-[5px] rounded-full bg-accent" />
-                      {item.badge.toLocaleString('en-US')}
+                      {badge.toLocaleString('en-US')}
                     </span>
                   ) : null}
                 </>
@@ -142,17 +142,14 @@ export function PaperSideNav() {
 
       <div className="mt-auto rounded-[8px] border border-line-2 bg-panel-2 p-[10px]">
         <div className="mb-[6px] font-mono text-[9.5px] leading-none font-semibold tracking-[0.06em] text-muted-4">
-          MEDIA PLANE
+          SESSION PLANE
         </div>
         <div className="flex justify-between font-sans text-[11px] leading-[1.4] font-medium text-ink-3">
-          <span>{MEDIA_PLANE.region}</span>
-          <span className="font-semibold text-good">{MEDIA_PLANE.health}</span>
+          <span>Web + macOS SDK</span>
+          <span className="font-semibold text-good">up</span>
         </div>
-        <div className="mt-[8px] mb-[5px] h-[4px] overflow-hidden rounded-[2px] bg-[#e6e0d8]">
-          <div className="h-full bg-accent" style={{ width: `${MEDIA_PLANE.gpuUtil}%` }} />
-        </div>
-        <div className="font-mono text-[10.5px] leading-none font-medium text-muted-2">
-          GPU util {MEDIA_PLANE.gpuUtil}% · {MEDIA_PLANE.sessions}/{MEDIA_PLANE.capacity} sessions
+        <div className="mt-[8px] font-mono text-[10.5px] leading-none font-medium text-muted-2">
+          {liveCount} live session{liveCount === 1 ? '' : 's'}
         </div>
       </div>
     </nav>
@@ -163,6 +160,7 @@ export function PaperSideNav() {
 export function OpsSideNav() {
   const pathname = usePathname()
   const { active, capacity, util } = useFleet()
+  const { liveCount, ended } = useLiveFeed()
 
   return (
     <nav className="flex w-[196px] flex-none flex-col gap-4 border-r border-ops-line bg-ops-nav p-[14px_12px]">
@@ -170,6 +168,7 @@ export function OpsSideNav() {
 
       <div className="flex flex-col gap-[2px]">
         {OPS_NAV.map((item) => {
+          const badge = item.href === '/calls' ? liveCount : item.badge
           const active = isActive(pathname, item.href)
           const className = `flex items-center justify-between rounded-[6px] px-[9px] py-[7px] font-sans text-[12.5px] leading-none ${
             active
@@ -181,10 +180,10 @@ export function OpsSideNav() {
           const body = (
             <>
               <span>{item.label}</span>
-              {item.badge ? (
+              {badge ? (
                 <span className="flex items-center gap-[5px] font-mono text-[9.5px] leading-none font-semibold text-accent">
                   <span className="h-[5px] w-[5px] rounded-full bg-accent" />
-                  {item.badge.toLocaleString('en-US')}
+                  {badge.toLocaleString('en-US')}
                 </span>
               ) : null}
             </>
@@ -223,7 +222,11 @@ export function OpsSideNav() {
         </div>
 
         <div className="flex flex-col gap-[6px] rounded-[8px] border border-ops-line bg-ops-panel-2 p-[10px]">
-          {DIALER_STATS.map((row) => (
+          {[
+            { label: 'Live sessions', value: String(liveCount) },
+            { label: 'Ended (retained)', value: String(ended.length) },
+            { label: 'Dialer', value: 'off' },
+          ].map((row) => (
             <div
               key={row.label}
               className="flex justify-between gap-2 font-mono text-[10.5px] leading-none font-medium text-ops-muted-2"
@@ -235,7 +238,11 @@ export function OpsSideNav() {
         </div>
 
         <div className="flex flex-col gap-[6px] rounded-[8px] border border-ops-line bg-ops-panel-2 p-[10px]">
-          {OPS_HEALTH.map((row) => (
+          {[
+            { label: 'Session API', value: 'up', tone: 'good' as const },
+            { label: 'Web + macOS SDK', value: 'ready', tone: 'good' as const },
+            { label: 'PSTN carrier', value: 'not wired', tone: 'alert' as const },
+          ].map((row) => (
             <div
               key={row.label}
               className="flex justify-between font-mono text-[10.5px] leading-none font-medium text-ops-muted-2"

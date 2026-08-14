@@ -1,5 +1,7 @@
 import { redirect } from 'next/navigation'
+import { getAuth } from '@/lib/auth/session'
 
-export default function Home() {
-  redirect('/agents')
+export default async function Home() {
+  const auth = await getAuth()
+  redirect(auth ? '/agents' : '/login')
 }
