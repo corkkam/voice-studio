@@ -2,12 +2,16 @@
 /*
  * Local development seed.
  *
- * Two halves, because the app has two write paths and both need exercising:
+ * Three halves by now, because the app has three write paths and all need
+ * exercising:
  *
- *   1. Tenant, user, agent and API keys go straight into the SQLite file. There
- *      is no HTTP route that creates a tenant (sign-up is a server action, and
- *      server actions cannot be called from a script).
- *   2. Calls are driven over /api/v1 with the seeded secret key, so the live
+ *   1. The demo operator is a real Clerk user, created over the Clerk Backend
+ *      API, so the printed login works in a browser. Clerk owns the credential;
+ *      this script only mirrors the id into the users table.
+ *   2. Tenant, user, agent and API keys go straight into the SQLite file. There
+ *      is no HTTP route that creates a tenant, and sign-up provisions one only
+ *      when a human first signs in.
+ *   3. Calls are driven over /api/v1 with the seeded secret key, so the live
  *      monitor, the SSE hub and the turn store all see real traffic rather than
  *      hand-written rows.
  *
@@ -21,9 +25,10 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
-import { createHash, randomBytes, scryptSync } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { clerkUserByEmail, createClerkUser } from './clerk.mjs'
 
 const BASE = process.env.STUDIO_BASE_URL || 'http://localhost:3000'
 const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'voice-studio.db')
@@ -31,7 +36,9 @@ const CALLS = Number(process.env.SEED_CALLS ?? 3)
 
 const DEMO = {
   email: process.env.SEED_EMAIL || 'demo@voice.studio',
-  password: process.env.SEED_PASSWORD || 'voicestudio',
+  // Clerk's development instance requires 15 characters and rejects any
+  // password found in a breach corpus, so this is longer than it looks.
+  password: process.env.SEED_PASSWORD || 'voicestudio-local',
   name: 'Demo Operator',
   workspace: 'Demo Workspace',
   agent: 'Support Concierge',
@@ -46,11 +53,6 @@ const UTTERANCES = [
 const sha256 = (value) => createHash('sha256').update(value).digest('hex')
 const id = (prefix) => `${prefix}_${randomBytes(8).toString('hex')}`
 const token = (bytes = 32) => randomBytes(bytes).toString('base64url')
-
-function hashPassword(password) {
-  const salt = randomBytes(16).toString('hex')
-  return `scrypt$${salt}$${scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex')}`
-}
 
 async function serverUp() {
   try {
@@ -67,20 +69,53 @@ async function serverUp() {
   }
 }
 
+function migrated() {
+  if (!existsSync(DB_PATH)) return false
+  const db = new DatabaseSync(DB_PATH)
+  const columns = db.prepare('PRAGMA table_info(users)').all()
+  db.close()
+  return columns.some((column) => column.name === 'clerk_user_id')
+}
+
+/*
+ * The app owns the schema, this script never writes DDL. A database created
+ * before Clerk landed still has the old users table, and its migration also
+ * runs inside bootstrap(), so one request to the server is what brings both a
+ * missing and a stale database up to date.
+ */
 async function ensureDb() {
-  if (existsSync(DB_PATH)) return true
+  if (migrated()) return true
   const up = await serverUp()
-  if (up && existsSync(DB_PATH)) return true
+  if (up && migrated()) return true
   console.error(
-    `No database at ${DB_PATH}.\n` +
-      `Start the app once so it creates the schema: pnpm dev, then re-run pnpm seed.`,
+    `No usable database at ${DB_PATH}.\n` +
+      `Start the app once so it creates and migrates the schema: pnpm dev, then re-run pnpm seed.`,
   )
   return false
 }
 
-function ensureTenant(db) {
+// The app provisions a tenant when a human first signs in. A seeded workspace
+// has to exist before that, so the same rows are written here and the Clerk id
+// is stored beside them. The first sign-in then adopts this row by email
+// instead of creating a second, empty workspace.
+async function ensureClerkUser() {
+  const existing = await clerkUserByEmail(DEMO.email)
+  if (existing) return { clerkUserId: existing.id, created: false }
+
+  const [firstName, ...rest] = DEMO.name.split(' ')
+  const user = await createClerkUser({
+    email: DEMO.email,
+    password: DEMO.password,
+    firstName,
+    lastName: rest.join(' '),
+  })
+  return { clerkUserId: user.id, created: true }
+}
+
+function ensureTenant(db, clerkUserId) {
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO.email)
   if (existing) {
+    db.prepare('UPDATE users SET clerk_user_id = ? WHERE id = ?').run(clerkUserId, existing.id)
     const member = db
       .prepare('SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1')
       .get(existing.id)
@@ -95,8 +130,8 @@ function ensureTenant(db) {
   while (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) slug = `demo-workspace-${++n}`
 
   db.prepare(
-    'INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(userId, DEMO.email, hashPassword(DEMO.password), DEMO.name, created)
+    'INSERT INTO users (id, clerk_user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(userId, clerkUserId, DEMO.email, DEMO.name, created)
   db.prepare(
     `INSERT INTO tenants (id, name, slug, region, owner_id, created_at)
      VALUES (?, ?, ?, 'IN-SOUTH', ?, ?)`,
@@ -220,17 +255,22 @@ async function driveCalls(agentId, secretKey) {
 async function main() {
   if (!(await ensureDb())) process.exit(1)
 
+  const clerkUser = await ensureClerkUser()
+
   const db = new DatabaseSync(DB_PATH)
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
 
-  const tenant = ensureTenant(db)
+  const tenant = ensureTenant(db, clerkUser.clerkUserId)
   const agent = ensureAgent(db, tenant.tenantId)
   const keys = rotateKeys(db, tenant.tenantId)
   db.close()
 
   console.log(`Workspace  ${tenant.tenantId} ${tenant.created ? '(created)' : '(existing)'}`)
-  console.log(`Login      ${DEMO.email} / ${DEMO.password}`)
+  console.log(
+    `Login      ${DEMO.email} / ${DEMO.password}` +
+      (clerkUser.created ? ' (Clerk user created)' : ' (existing Clerk user)'),
+  )
   console.log(`Agent      ${agent.agentId} ${agent.created ? '(created)' : '(existing, published)'}`)
   console.log(`Secret key ${keys.secret}`)
   console.log(`Public key ${keys.publishable}`)

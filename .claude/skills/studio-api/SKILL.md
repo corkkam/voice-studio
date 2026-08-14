@@ -9,7 +9,7 @@ description: Add or change a Voice Studio API route, key kind, session capabilit
 
 | Caller | Credential | Reaches |
 | --- | --- | --- |
-| Operator in the browser | `vs_session` cookie -> `getAuth()` | `/api/internal/*` and every page |
+| Operator in the browser | Clerk session -> `getAuth()` | `/api/internal/*` and every page |
 | Client app, server side | `vs_sk_live_` -> `requireApiKey(req)` | `/api/v1/*`, any channel |
 | Browser or widget | `vs_pk_live_` -> `requireApiKey(req)` | `/api/v1/*`, published agents only |
 | A live session | `vst_` -> `resolveSessionToken(raw)` | its own session, `/api/media/complete` |

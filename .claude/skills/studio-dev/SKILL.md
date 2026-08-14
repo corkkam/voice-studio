@@ -57,8 +57,11 @@ eval "$(pnpm -s session --export)"     # sets $VS_COOKIE
 curl -s -H "Cookie: $VS_COOKIE" http://localhost:3000/agents | grep -c "Support Concierge"
 ```
 
-`scripts/session.mjs` inserts a real `sessions` row, because sign-in is a server action
-that no script can post to. Use the cookie for any route under the gate.
+`scripts/session.mjs` mints a real Clerk session over the Backend API, because sign-in is
+a browser flow that no script can post to. The cookie carries three values the gate wants
+on a development instance: the session token, a last-active stamp, and a dev browser
+token. The session token is short-lived, so re-run the command rather than keeping a
+cookie. Use it for any route under the gate.
 
 Useful ids straight from the rendered page:
 

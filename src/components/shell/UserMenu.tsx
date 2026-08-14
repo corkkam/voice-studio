@@ -1,6 +1,6 @@
 'use client'
 
-import { signOut } from '@/lib/auth/actions'
+import { SignOutButton } from '@clerk/nextjs'
 import { useWorkspace } from '@/lib/runtime'
 
 export function UserMenu() {
@@ -15,14 +15,14 @@ export function UserMenu() {
       >
         {workspace.initials}
       </div>
-      <form action={signOut}>
+      <SignOutButton redirectUrl="/login">
         <button
-          type="submit"
+          type="button"
           className="font-sans text-[11px] font-semibold text-muted hover:text-ink"
         >
           Sign out
         </button>
-      </form>
+      </SignOutButton>
     </div>
   )
 }

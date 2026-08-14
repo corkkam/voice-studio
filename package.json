@@ -8,10 +8,11 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "seed": "node scripts/seed.mjs",
-    "session": "node scripts/session.mjs"
+    "seed": "node --env-file-if-exists=.env.local scripts/seed.mjs",
+    "session": "node --env-file-if-exists=.env.local scripts/session.mjs"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.7.4",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

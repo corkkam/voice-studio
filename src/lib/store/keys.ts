@@ -1,8 +1,7 @@
 import 'server-only'
 
 import { getDb, now, row, rows } from '@/lib/db'
-import { id, token } from '@/lib/db/ids'
-import { sha256 } from '@/lib/auth/password'
+import { id, sha256, token } from '@/lib/db/ids'
 import type { ApiKeyRow, KeyKind } from '@/lib/store/types'
 
 export function listKeys(tenantId: string): Omit<ApiKeyRow, 'key_hash'>[] {

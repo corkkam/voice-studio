@@ -51,7 +51,7 @@ is a decision to raise, not a dependency to install.
 | Language | TypeScript strict | Row interfaces in `src/lib/store/types.ts` are the source of truth and flow outward. No `any`. |
 | Styling | Tailwind v4 | `@theme` tokens in `src/app/globals.css`, used as classes. `src/components/ui/primitives.tsx` is the whole design system. |
 | Data | `node:sqlite`, no ORM | Every SQL string lives in `src/lib/store/*`. Postgres is the one planned swap. |
-| Auth, humans | Clerk (`@clerk/nextjs`) | Decided. Migration pending: see the `studio-auth` skill. Until it lands, the hand-rolled session in `src/lib/auth/*` is the gate. |
+| Auth, humans | Clerk (`@clerk/nextjs`) | Landed. `clerkMiddleware()` in `src/proxy.ts` is the gate, `getAuth()` in `src/lib/auth/session.ts` turns a Clerk user into a tenant. There is no password path left. |
 | Auth, machines | Our API keys | `vs_sk_live_`, `vs_pk_live_`, `vst_`. Stays ours after the Clerk migration. Clerk never guards `/api/v1`. |
 | Realtime | SSE plus an in-process hub | `src/lib/realtime/hub.ts`. No WebSocket server, no Redis, no third-party realtime service. |
 | Model calls | One `fetch` in `src/lib/media/complete.ts` | If streaming or a second provider is needed, move that one file to the AI SDK through Vercel AI Gateway. Never add a provider SDK per call site. |
@@ -94,10 +94,15 @@ pnpm seed                     # demo tenant, published agent, key pair, live cal
 eval "$(pnpm -s session --export)"   # $VS_COOKIE for a signed-in fetch
 ```
 
-`pnpm seed` prints the login (`demo@voice.studio` / `voicestudio`) and a fresh key
-pair. It writes the tenant rows with SQL because sign-up is a server action no script
-can call, then drives the calls over `/api/v1` so the store, the hub and the monitor
-all see real traffic. Re-running is safe; it rotates only its own keys.
+Both scripts read `.env.local` for the Clerk development keys. A fresh clone gets them
+with `clerk env pull --file .env.local`; without them, neither script can run.
+
+`pnpm seed` creates the demo operator as a real Clerk user, prints the login
+(`demo@voice.studio` / `voicestudio-local`) and a fresh key pair. It writes the tenant
+rows with SQL because a tenant is provisioned only when a human first signs in, then
+drives the calls over `/api/v1` so the store, the hub and the monitor all see real
+traffic. Re-running is safe; it rotates only its own keys. `pnpm session` mints a short
+lived Clerk session, so re-run it rather than keeping `$VS_COOKIE` around.
 
 The database is `data/voice-studio.db`. `data/` and `*.db` are git-ignored. Deleting
 the file is the supported reset.
@@ -139,11 +144,14 @@ Each of these has already cost time. None is visible from the code you are editi
    between requests. This is the gate on production, not permission.
 3. **The realtime hub is an in-process `Map`.** `src/lib/realtime/hub.ts` fans out
    only inside one server process. Any multi-instance deployment loses monitor events.
-4. **The auth gate is `src/proxy.ts`.** Next 16 renamed middleware to proxy. Its
-   `PUBLIC` array is the entire gate. Adding a pattern there can expose an operator
+4. **The auth gate is `src/proxy.ts`.** Next 16 renamed middleware to proxy. The
+   `createRouteMatcher` list passed to `clerkMiddleware()` is the entire gate: every
+   route not in it calls `auth.protect()`. Adding a pattern there can expose an operator
    surface to anonymous traffic. `/api/v1`, `/api/media`, `/widget` and `/sdk` are
-   public on purpose and guard themselves with API keys or session tokens. Never add a
-   bypass flag, in any environment.
+   public on purpose and guard themselves with API keys or session tokens. A public API
+   route that starts redirecting to `/login` breaks all three SDKs and the widget, so
+   check it with a bare `curl` after any change. Never add a bypass flag, in any
+   environment.
 5. **Two data layers, one direction.** `src/lib/store/*` owns SQL and is
    `server-only`. `src/lib/data/*` owns view models, types and design-time defaults.
    Components read view models. Never import a store module into a client component,
@@ -242,7 +250,7 @@ git tag -a v0.3.0 -m "v0.3.0" && git push origin v0.3.0   # after the PR merges
   value.
 - Development keys never reach production, production keys never reach a laptop.
 - Names in use: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `XAI_API_KEY`,
-  `DATABASE_PATH`, and `AUTH_SECRET` which retires with the Clerk migration.
+  `DATABASE_PATH`. `AUTH_SECRET` retired with the Clerk migration.
 
 ### Releasing
 

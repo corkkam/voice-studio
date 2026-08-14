@@ -2,8 +2,7 @@
 
 import { useActionState } from 'react'
 import { createAgentAction } from '@/lib/store/actions'
-import { Button } from '@/components/ui/primitives'
-import { Field } from '@/components/auth/LoginForm'
+import { Button, Field } from '@/components/ui/primitives'
 
 export function NewAgentForm() {
   const [state, action, pending] = useActionState(createAgentAction, undefined)

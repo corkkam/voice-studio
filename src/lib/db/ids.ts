@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
 export function id(prefix: string): string {
   return `${prefix}_${randomBytes(8).toString('hex')}`
@@ -6,6 +6,11 @@ export function id(prefix: string): string {
 
 export function token(bytes = 32): string {
   return randomBytes(bytes).toString('base64url')
+}
+
+/** API keys and vst_ tokens are stored as hashes only, never as the value. */
+export function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 export function slugify(value: string, fallback = 'item'): string {

@@ -9,13 +9,14 @@ watch them run on Indian PSTN, and audit what they said. Implemented from the
 pnpm install
 pnpm dev        # http://localhost:3000 — create a workspace at /signup
 pnpm seed       # or: demo tenant, published agent, key pair, live calls
-pnpm session    # a vs_session cookie for the seeded user, for scripted checks
+pnpm session    # a Clerk session cookie for the seeded user, for scripted checks
 pnpm build      # production build
 pnpm typecheck
 ```
 
-`pnpm seed` prints the demo login and a fresh API key pair, and drives its calls through
-the public API so the monitor has real traffic. `SEED_CALLS=40 pnpm seed` fills the grid.
+`pnpm seed` creates the demo operator as a real Clerk user, prints the login and a fresh
+API key pair, and drives its calls through the public API so the monitor has real traffic.
+It needs the Clerk development keys in `.env.local`: `clerk env pull --file .env.local`. `SEED_CALLS=40 pnpm seed` fills the grid.
 Local state is `data/voice-studio.db`; deleting it is the supported reset.
 
 For the architecture, decision log, unit economics and staged plan, see the CTO
