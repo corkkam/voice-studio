@@ -27,7 +27,9 @@ SEED_CALLS=0 pnpm seed          # tenant, agent and keys only
 SEED_CALLS=40 pnpm seed         # enough cards to exercise the virtual grid
 ```
 
-Prints login `demo@voice.studio` / `voicestudio`, the agent id, and a fresh key pair.
+Prints the workspace id, the agent id and a fresh key pair. It creates no login: Clerk
+owns humans. Pass `SEED_CLERK_USER_ID=user_xxx` so the workspace belongs to your Clerk
+account, otherwise you cannot see the seeded traffic when signed in.
 
 Each run mints a new pair and deletes the previous seeded one, so a key you printed
 earlier stops working after the next seed. When a script needs the values, capture them
@@ -52,19 +54,20 @@ running.
 
 ## 3. Get a signed-in page
 
+Clerk owns the session, so nothing mints a cookie. What still works headlessly:
+
 ```bash
-eval "$(pnpm -s session --export)"     # sets $VS_COOKIE
-curl -s -H "Cookie: $VS_COOKIE" http://localhost:3000/agents | grep -c "Support Concierge"
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/agents                   # redirect
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:3000/api/v1/sessions  # 401
 ```
 
-`scripts/session.mjs` inserts a real `sessions` row, because sign-in is a server action
-that no script can post to. Use the cookie for any route under the gate.
+For a signed-in page, sign in as a Clerk development test user with the preview browser
+tools, or drive the flow with `@clerk/testing`. Never add a bypass to make this cheaper.
 
-Useful ids straight from the rendered page:
+Ids without a session, straight from the database:
 
 ```bash
-curl -s -H "Cookie: $VS_COOKIE" http://localhost:3000/calls  | grep -o 'call_[0-9a-f]\{16\}' | head -1
-curl -s -H "Cookie: $VS_COOKIE" http://localhost:3000/agents | grep -o 'agt_[0-9a-f]\{16\}'  | head -1
+node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/voice-studio.db');console.log(d.prepare(\"select id,status from calls order by started_at desc limit 3\").all())"
 ```
 
 ## 4. Drive a call by hand

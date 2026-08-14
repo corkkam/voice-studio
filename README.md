@@ -8,14 +8,15 @@ watch them run on Indian PSTN, and audit what they said. Implemented from the
 ```bash
 pnpm install
 pnpm dev        # http://localhost:3000 — create a workspace at /signup
-pnpm seed       # or: demo tenant, published agent, key pair, live calls
-pnpm session    # a vs_session cookie for the seeded user, for scripted checks
+pnpm seed       # workspace, published agent, key pair, live calls
 pnpm build      # production build
 pnpm typecheck
 ```
 
-`pnpm seed` prints the demo login and a fresh API key pair, and drives its calls through
-the public API so the monitor has real traffic. `SEED_CALLS=40 pnpm seed` fills the grid.
+Sign-in is Clerk: add `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` to
+`.env.local`, then sign up once. `pnpm seed` prints a fresh API key pair and drives its
+calls through the public API so the monitor has real traffic; pass
+`SEED_CLERK_USER_ID=user_xxx` to attach the seeded workspace to your account. `SEED_CALLS=40 pnpm seed` fills the grid.
 Local state is `data/voice-studio.db`; deleting it is the supported reset.
 
 For the architecture, decision log, unit economics and staged plan, see the CTO

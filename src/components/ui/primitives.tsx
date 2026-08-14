@@ -133,3 +133,34 @@ export function Card({
     </div>
   )
 }
+
+/** Labelled text input. Was in the old sign-in form; every studio form uses it. */
+export function Field({
+  label,
+  name,
+  type = 'text',
+  autoComplete,
+  defaultValue,
+}: {
+  label: string
+  name: string
+  type?: string
+  autoComplete?: string
+  defaultValue?: string
+}) {
+  return (
+    <label className="flex flex-col gap-[7px]">
+      <span className="font-mono text-[10px] font-semibold tracking-[0.07em] text-muted-4">
+        {label.toUpperCase()}
+      </span>
+      <input
+        name={name}
+        type={type}
+        required
+        autoComplete={autoComplete}
+        defaultValue={defaultValue}
+        className="rounded-[7px] border border-line bg-panel px-3 py-[10px] font-sans text-[13px] text-ink outline-none focus:border-accent"
+      />
+    </label>
+  )
+}

@@ -1,33 +1,24 @@
-import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
-import { SESSION_COOKIE } from '@/lib/auth/constants'
+import { clerkMiddleware } from '@clerk/nextjs/server'
 
-const PUBLIC = [
-  /^\/login$/,
-  /^\/signup$/,
-  /^\/api\/v1\//,
-  /^\/api\/media\//,
-  /^\/widget\//,
-  /^\/sdk\//,
-]
-
-export function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl
-  const isPublic = PUBLIC.some((pattern) => pattern.test(pathname))
-  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value)
-
-  if (!hasSession && !isPublic) {
-    const login = new URL('/login', request.url)
-    login.searchParams.set('next', pathname)
-    return NextResponse.redirect(login)
-  }
-
-  if (hasSession && (pathname === '/login' || pathname === '/signup')) {
-    return NextResponse.redirect(new URL('/agents', request.url))
-  }
-
-  return NextResponse.next()
-}
+/*
+ * Attaches the Clerk session to every request. It deliberately decides nothing.
+ *
+ * Clerk deprecated path-matched gating (`createRouteMatcher`) because a matcher
+ * can diverge from how Next actually routes a request and leave a protected
+ * resource reachable. The gate is per resource instead, and every resource
+ * already has one:
+ *
+ *   - the `(studio)` and `(ops)` layouts call `requireAuth()`, which redirects
+ *     to /login, so every operator surface inherits the gate
+ *   - `/api/internal/*` calls `getAuth()` and answers 401
+ *   - `/api/v1`, `/api/media`, `/widget` and `/sdk` authenticate their own
+ *     credential: an API key, a `vst_` session token, or nothing because they
+ *     are static
+ *
+ * Adding a resource means adding its check. Never add a bypass, in any
+ * environment.
+ */
+export default clerkMiddleware()
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|js)$).*)'],

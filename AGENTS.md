@@ -51,7 +51,7 @@ is a decision to raise, not a dependency to install.
 | Language | TypeScript strict | Row interfaces in `src/lib/store/types.ts` are the source of truth and flow outward. No `any`. |
 | Styling | Tailwind v4 | `@theme` tokens in `src/app/globals.css`, used as classes. `src/components/ui/primitives.tsx` is the whole design system. |
 | Data | `node:sqlite`, no ORM | Every SQL string lives in `src/lib/store/*`. Postgres is the one planned swap. |
-| Auth, humans | Clerk (`@clerk/nextjs`) | Decided. Migration pending: see the `studio-auth` skill. Until it lands, the hand-rolled session in `src/lib/auth/*` is the gate. |
+| Auth, humans | Clerk (`@clerk/nextjs`) | `clerkMiddleware()` in `src/proxy.ts` is the gate. `src/lib/auth/session.ts` maps a Clerk user to a tenant. |
 | Auth, machines | Our API keys | `vs_sk_live_`, `vs_pk_live_`, `vst_`. Stays ours after the Clerk migration. Clerk never guards `/api/v1`. |
 | Realtime | SSE plus an in-process hub | `src/lib/realtime/hub.ts`. No WebSocket server, no Redis, no third-party realtime service. |
 | Model calls | One `fetch` in `src/lib/media/complete.ts` | If streaming or a second provider is needed, move that one file to the AI SDK through Vercel AI Gateway. Never add a provider SDK per call site. |
@@ -89,15 +89,19 @@ better flow is a defect.
 
 ```bash
 pnpm install
-pnpm dev                      # http://localhost:3000
-pnpm seed                     # demo tenant, published agent, key pair, live calls
-eval "$(pnpm -s session --export)"   # $VS_COOKIE for a signed-in fetch
+pnpm dev                                  # http://localhost:3000
+SEED_CLERK_USER_ID=user_xxx pnpm seed     # workspace, published agent, keys, live calls
 ```
 
-`pnpm seed` prints the login (`demo@voice.studio` / `voicestudio`) and a fresh key
-pair. It writes the tenant rows with SQL because sign-up is a server action no script
-can call, then drives the calls over `/api/v1` so the store, the hub and the monitor
-all see real traffic. Re-running is safe; it rotates only its own keys.
+Sign-in is Clerk, so `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` must be
+in `.env.local` before the app can boot signed-in. Sign up once; the workspace, the
+membership and the defaults are provisioned on your first signed-in request, with no
+onboarding step.
+
+`pnpm seed` writes the workspace, the agent and the keys with SQL, then drives calls
+over `/api/v1` so the store, the hub and the monitor all see real traffic. Pass your
+Clerk user id, or the seeded workspace belongs to a placeholder owner that no signed-in
+operator can see. Re-running is safe; it rotates only its own keys.
 
 The database is `data/voice-studio.db`. `data/` and `*.db` are git-ignored. Deleting
 the file is the supported reset.
@@ -111,15 +115,20 @@ pnpm build                    # both must be clean
 
 ## 5. Verify before you claim
 
-A page render is checkable without a browser, so check it:
+Clerk owns the browser session, so there is no cookie a script can mint. Two checks
+still work without a browser, and both matter:
 
 ```bash
-eval "$(pnpm -s session --export)"
-curl -s -o /dev/null -w '%{http_code}\n' -H "Cookie: $VS_COOKIE" http://localhost:3000/calls
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/agents               # redirect, gate holds
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:3000/api/v1/sessions  # 401, not a redirect
 ```
 
-Every operator surface redirects to `/login` without that cookie, so a bare `curl`
-of `/agents` proving "200" proves only that the gate works.
+The second is the one that catches a wrong route matcher: a public API route that starts
+redirecting to `/login` breaks every SDK and the widget.
+
+Anything signed-in needs a real session: sign in as a Clerk development test user with
+the preview browser tools, or drive it with `@clerk/testing`. Never add a bypass to make
+a check easier.
 
 For anything visual, capture the screen. Use the preview browser tools if they answer;
 if browser automation is unavailable in the session, say so plainly and report the
@@ -139,11 +148,12 @@ Each of these has already cost time. None is visible from the code you are editi
    between requests. This is the gate on production, not permission.
 3. **The realtime hub is an in-process `Map`.** `src/lib/realtime/hub.ts` fans out
    only inside one server process. Any multi-instance deployment loses monitor events.
-4. **The auth gate is `src/proxy.ts`.** Next 16 renamed middleware to proxy. Its
-   `PUBLIC` array is the entire gate. Adding a pattern there can expose an operator
-   surface to anonymous traffic. `/api/v1`, `/api/media`, `/widget` and `/sdk` are
-   public on purpose and guard themselves with API keys or session tokens. Never add a
-   bypass flag, in any environment.
+4. **The gate is per resource, not in `src/proxy.ts`.** `proxy.ts` only attaches the
+   Clerk session; Clerk deprecated path-matched gating because a matcher can diverge
+   from how Next routes a request. Access is decided by `requireAuth()` in the
+   `(studio)` and `(ops)` layouts, `getAuth()` in `/api/internal/*`, and the key or
+   token check inside `/api/v1`, `/api/media` and `/widget`. **A new resource with no
+   check is open.** Never add a bypass flag, in any environment.
 5. **Two data layers, one direction.** `src/lib/store/*` owns SQL and is
    `server-only`. `src/lib/data/*` owns view models, types and design-time defaults.
    Components read view models. Never import a store module into a client component,

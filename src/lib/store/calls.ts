@@ -2,7 +2,7 @@ import 'server-only'
 
 import { getDb, now, row, rows } from '@/lib/db'
 import { id, token } from '@/lib/db/ids'
-import { sha256 } from '@/lib/auth/password'
+import { sha256 } from '@/lib/db/hash'
 import { publish } from '@/lib/realtime/hub'
 import { formatElapsed, type EndedCall, type LiveCall } from '@/lib/data/calls'
 import type { CallActivity } from '@/lib/activity'

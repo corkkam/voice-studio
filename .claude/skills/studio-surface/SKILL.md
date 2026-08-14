@@ -79,8 +79,7 @@ one.
 
 ```bash
 pnpm typecheck
-eval "$(pnpm -s session --export)"
-curl -s -o /dev/null -w '%{http_code}\n' -H "Cookie: $VS_COOKIE" http://localhost:3000/<route>
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/<route>   # redirect while signed out
 ```
 
 Then look at it. Screenshot the surface in its own shell, and both shells if the change

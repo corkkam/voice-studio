@@ -4,12 +4,19 @@
  *
  * Two halves, because the app has two write paths and both need exercising:
  *
- *   1. Tenant, user, agent and API keys go straight into the SQLite file. There
- *      is no HTTP route that creates a tenant (sign-up is a server action, and
- *      server actions cannot be called from a script).
+ *   1. Tenant, agent and API keys go straight into the SQLite file. Clerk owns
+ *      humans, so nothing here creates a login.
  *   2. Calls are driven over /api/v1 with the seeded secret key, so the live
  *      monitor, the SSE hub and the turn store all see real traffic rather than
  *      hand-written rows.
+ *
+ * To see the seeded traffic in the monitor, the workspace has to be yours. Sign
+ * in once, take your Clerk user id from the dashboard, and pass it:
+ *
+ *   SEED_CLERK_USER_ID=user_xxx pnpm seed
+ *
+ * Without it the workspace belongs to a placeholder owner: the API and the SDKs
+ * work against it, but no signed-in operator can see it.
  *
  * The schema is created by the app (`bootstrap()` in src/lib/db/index.ts), never
  * here. If the DB file is missing, one unauthorised API request is enough to make
@@ -21,18 +28,18 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
-import { createHash, randomBytes, scryptSync } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 const BASE = process.env.STUDIO_BASE_URL || 'http://localhost:3000'
 const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'voice-studio.db')
 const CALLS = Number(process.env.SEED_CALLS ?? 3)
+const CLERK_USER_ID = process.env.SEED_CLERK_USER_ID || ''
 
 const DEMO = {
   email: process.env.SEED_EMAIL || 'demo@voice.studio',
-  password: process.env.SEED_PASSWORD || 'voicestudio',
-  name: 'Demo Operator',
+  name: 'Seed Owner',
   workspace: 'Demo Workspace',
   agent: 'Support Concierge',
 }
@@ -47,14 +54,15 @@ const sha256 = (value) => createHash('sha256').update(value).digest('hex')
 const id = (prefix) => `${prefix}_${randomBytes(8).toString('hex')}`
 const token = (bytes = 32) => randomBytes(bytes).toString('base64url')
 
-function hashPassword(password) {
-  const salt = randomBytes(16).toString('hex')
-  return `scrypt$${salt}$${scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex')}`
-}
-
 async function serverUp() {
   try {
-    const res = await fetch(`${BASE}/api/v1/sessions`, { method: 'POST' })
+    // A rejected key still reaches the key lookup, which opens the database and
+    // creates the schema. A request with no Authorization header is refused
+    // before any query runs, so it would never bootstrap anything.
+    const res = await fetch(`${BASE}/api/v1/sessions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer vs_sk_live_seed_bootstrap_probe' },
+    })
     return res.status === 401
   } catch {
     return false
@@ -73,24 +81,28 @@ async function ensureDb() {
 }
 
 function ensureTenant(db) {
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO.email)
+  // The owner is the Clerk user id when given, so the signed-in operator sees
+  // the seeded traffic. Otherwise a placeholder owner no human can sign in as.
+  const userId = CLERK_USER_ID || 'usr_seed'
+  const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(userId)
   if (existing) {
     const member = db
       .prepare('SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1')
       .get(existing.id)
-    return { userId: existing.id, tenantId: member.tenant_id, created: false }
+    if (member) return { userId: existing.id, tenantId: member.tenant_id, created: false }
   }
 
   const created = Date.now()
-  const userId = id('usr')
   const tenantId = id('ten')
   let slug = 'demo-workspace'
   let n = 1
   while (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) slug = `demo-workspace-${++n}`
 
   db.prepare(
-    'INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(userId, DEMO.email, hashPassword(DEMO.password), DEMO.name, created)
+    `INSERT INTO users (id, email, password_hash, name, created_at)
+     VALUES (?, ?, '', ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+  ).run(userId, DEMO.email, DEMO.name, created)
   db.prepare(
     `INSERT INTO tenants (id, name, slug, region, owner_id, created_at)
      VALUES (?, ?, ?, 'IN-SOUTH', ?, ?)`,
@@ -224,7 +236,11 @@ async function main() {
   db.close()
 
   console.log(`Workspace  ${tenant.tenantId} ${tenant.created ? '(created)' : '(existing)'}`)
-  console.log(`Login      ${DEMO.email} / ${DEMO.password}`)
+  console.log(
+    CLERK_USER_ID
+      ? `Owner      ${CLERK_USER_ID} (sign in as this Clerk user to see it)`
+      : 'Owner      placeholder. Pass SEED_CLERK_USER_ID to attach it to your account.',
+  )
   console.log(`Agent      ${agent.agentId} ${agent.created ? '(created)' : '(existing, published)'}`)
   console.log(`Secret key ${keys.secret}`)
   console.log(`Public key ${keys.publishable}`)

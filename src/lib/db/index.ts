@@ -20,19 +20,14 @@ function bootstrap(db: DatabaseSync) {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(`
+    -- A mirror of the Clerk user, keyed by the Clerk user id, so the tenancy
+    -- foreign keys below need no change. password_hash is dead weight kept
+    -- because it is NOT NULL on databases created before Clerk landed.
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      token_hash TEXT NOT NULL UNIQUE,
-      expires_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     );
 
