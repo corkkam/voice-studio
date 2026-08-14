@@ -23,14 +23,14 @@ const PAPER_NAV: NavGroup[] = [
     title: 'BUILD',
     items: [
       { label: 'Agents', href: '/agents' },
-      { label: 'Voices', pending: true },
-      { label: 'Knowledge & tools', pending: true },
+      { label: 'Voices', href: '/voices' },
+      { label: 'Knowledge and tools', href: '/knowledge' },
     ],
   },
   {
     title: 'RUN',
     items: [
-      { label: 'Numbers & SIP', pending: true },
+      { label: 'Numbers and SIP', href: '/numbers' },
       { label: 'Campaigns', href: '/campaigns' },
       { label: 'Calls', href: '/calls' },
     ],
@@ -38,8 +38,8 @@ const PAPER_NAV: NavGroup[] = [
   {
     title: 'TRUST',
     items: [
-      { label: 'Evals', pending: true },
-      { label: 'Compliance', pending: true },
+      { label: 'Evals', href: '/evals' },
+      { label: 'Compliance', href: '/compliance' },
       { label: 'Keys', href: '/keys' },
     ],
   },
@@ -50,7 +50,7 @@ const OPS_NAV: NavItem[] = [
   { label: 'Campaigns', href: '/campaigns' },
   { label: 'Live calls', href: '/calls' },
   { label: 'Keys', href: '/keys' },
-  { label: 'Evals', pending: true },
+  { label: 'Evals', href: '/evals' },
 ]
 
 function Wordmark({ tone }: { tone: 'paper' | 'ops' }) {
@@ -74,6 +74,7 @@ function isActive(pathname: string, href?: string) {
   if (href === '/calls') return pathname === '/calls'
   if (href.startsWith('/calls/')) return pathname.startsWith('/calls/')
   if (href.startsWith('/campaigns')) return pathname.startsWith('/campaigns')
+  if (href === '/evals') return pathname === '/evals' || pathname.startsWith('/evals/')
   return pathname === href
 }
 
@@ -130,7 +131,7 @@ export function PaperSideNav() {
                 <div
                   key={item.label}
                   className={className}
-                  title="Nav slot reserved — screen not designed yet"
+                  title="Nav slot reserved. No screen for it yet."
                 >
                   {body}
                 </div>

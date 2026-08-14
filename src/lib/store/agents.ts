@@ -49,6 +49,7 @@ export function createAgent(
     carrier: 'Web + macOS',
     system_prompt: (input.prompt || DEFAULT_PROMPT).trim(),
     topology: 'cascaded',
+    voice_id: null,
     version: 1,
     model_provider: '',
     model_name: '',
@@ -60,10 +61,10 @@ export function createAgent(
   db.prepare(
     `INSERT INTO agents (
       id, tenant_id, name, slug, locale, locale_tone, summary, status,
-      pipeline_json, series, carrier, system_prompt, topology, version,
+      pipeline_json, series, carrier, system_prompt, topology, voice_id, version,
       model_provider, model_name, model_credential_id,
       created_at, updated_at, published_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.tenant_id,
@@ -78,6 +79,7 @@ export function createAgent(
     row.carrier,
     row.system_prompt,
     row.topology,
+    row.voice_id,
     row.version,
     row.model_provider,
     row.model_name,
@@ -87,6 +89,57 @@ export function createAgent(
     row.published_at,
   )
   return row
+}
+
+/** Agents bound to a voice preset, so /voices can show what a preset drives. */
+export function countAgentsByVoice(tenantId: string): Record<string, number> {
+  const counts = getDb()
+    .prepare(
+      `SELECT voice_id, COUNT(*) AS n FROM agents
+       WHERE tenant_id = ? AND voice_id IS NOT NULL GROUP BY voice_id`,
+    )
+    .all(tenantId) as { voice_id: string; n: number }[]
+  return Object.fromEntries(counts.map((c) => [c.voice_id, Number(c.n) || 0]))
+}
+
+export interface AgentSummary {
+  id: string
+  name: string
+  status: AgentStatus
+  version: number
+  voiceId: string | null
+}
+
+/*
+ * The cheap agent list. The five build and trust surfaces need a name, a status
+ * and a version per agent and nothing else, so they take this instead of
+ * listAgents, which runs a latency percentile per row.
+ */
+export function listAgentSummaries(tenantId: string): AgentSummary[] {
+  const found = getDb()
+    .prepare(
+      'SELECT id, name, status, version, voice_id FROM agents WHERE tenant_id = ? ORDER BY created_at ASC',
+    )
+    .all(tenantId) as {
+    id: string
+    name: string
+    status: AgentStatus
+    version: number
+    voice_id: string | null
+  }[]
+  return found.map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    status: agent.status,
+    version: Number(agent.version) || 1,
+    voiceId: agent.voice_id,
+  }))
+}
+
+export function setAgentVoice(tenantId: string, agentId: string, voiceId: string | null): void {
+  getDb()
+    .prepare('UPDATE agents SET voice_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?')
+    .run(voiceId, now(), agentId, tenantId)
 }
 
 export function updateAgent(

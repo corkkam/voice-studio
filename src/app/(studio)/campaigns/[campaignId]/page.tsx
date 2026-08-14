@@ -3,11 +3,13 @@ import Link from 'next/link'
 import { CrumbBar } from '@/components/shell/TopBar'
 import { Button, Eyebrow, Meter } from '@/components/ui/primitives'
 import { CampaignRows } from '@/components/campaign/CampaignRows'
-import { EMPTY_GATE, type GateCheck } from '@/lib/data/campaign'
+import { campaignGate, type GateCheck } from '@/lib/data/campaign'
 import { requireAuth } from '@/lib/auth/session'
 import { getCampaign } from '@/lib/store/campaigns'
 import { getAgentRow } from '@/lib/store/agents'
 import { countLive } from '@/lib/store/calls'
+import { policyOrEmpty } from '@/lib/store/policies'
+import { listNumberIntents } from '@/lib/store/numbers'
 
 export default async function CampaignPage({
   params,
@@ -20,6 +22,13 @@ export default async function CampaignPage({
   if (!campaign) notFound()
   const agent = campaign.agent_id ? getAgentRow(auth.tenant.id, campaign.agent_id) : undefined
   const live = countLive(auth.tenant.id)
+  const policy = agent ? policyOrEmpty(auth.tenant.id, agent.id) : undefined
+  const gate = campaignGate({
+    agentName: agent?.name ?? null,
+    disclosure: policy?.disclosure ?? '',
+    retentionDays: policy?.retention_days ?? 30,
+    numberIntents: listNumberIntents(auth.tenant.id).length,
+  })
 
   return (
     <>
@@ -83,7 +92,7 @@ export default async function CampaignPage({
             </p>
           </div>
           <div className="flex flex-col gap-2">
-            {EMPTY_GATE.map((check) => (
+            {gate.map((check) => (
               <GateRow key={check.title} check={check} />
             ))}
           </div>

@@ -2,6 +2,8 @@ import { apiError, corsHeaders, json, publicBaseUrl, readJson } from '@/lib/api/
 import { requireApiKey } from '@/lib/api/guard'
 import { createCall } from '@/lib/store/calls'
 import { getAgentRow } from '@/lib/store/agents'
+import { resolveVoice } from '@/lib/store/voices'
+import { policyOrEmpty } from '@/lib/store/policies'
 import { parseModelRef, type ModelRef } from '@/lib/models/catalog'
 import { assertRoutable, ModelRouteError } from '@/lib/models/route'
 import type { CallChannel } from '@/lib/store/types'
@@ -67,6 +69,11 @@ export async function POST(req: Request) {
     model,
   })
 
+  // Additive fields only. Three SDKs and the widget ship against this shape, so
+  // `voice` and `disclosure` are new keys an old client simply ignores.
+  const voice = resolveVoice(key.tenant_id, agent.voice_id)
+  const policy = policyOrEmpty(key.tenant_id, agent.id)
+
   const base = publicBaseUrl(req)
   return json(
     {
@@ -81,6 +88,20 @@ export async function POST(req: Request) {
         version: agent.version,
         model: agent.model_provider ? `${agent.model_provider}/${agent.model_name}` : null,
       },
+      // The client resolves this against a real device voice. There is no
+      // server-side TTS to apply it for them.
+      voice: voice
+        ? {
+            id: voice.id,
+            name: voice.name,
+            locale: voice.locale,
+            familyHint: voice.family_hint,
+            rate: voice.rate,
+            pitch: voice.pitch,
+          }
+        : null,
+      // Recorded intent. The client must play it; nothing here can enforce that.
+      disclosure: policy.disclosure || null,
       model: model ? `${model.provider}/${model.model}` : null,
       eventsUrl: `${base}/api/v1/sessions/${call.id}/events?token=${encodeURIComponent(sessionToken)}`,
       completeUrl: `${base}/api/media/complete`,

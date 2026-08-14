@@ -1,33 +1,28 @@
-import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
-import { SESSION_COOKIE } from '@/lib/auth/constants'
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 
-const PUBLIC = [
-  /^\/login$/,
-  /^\/signup$/,
-  /^\/api\/v1\//,
-  /^\/api\/media\//,
-  /^\/widget\//,
-  /^\/sdk\//,
-]
+/*
+ * The whole gate. Everything not listed here is private, so a new operator
+ * surface is protected the moment it exists. Each entry earns its place:
+ *
+ *   /login, /signup   Clerk's own screens, mounted as catch-alls
+ *   /api/v1           other people's software, guarded by our API keys
+ *   /api/media        widget and SDK turns, guarded by a vst_ session token
+ *   /widget           the embeddable page, guarded by a publishable key
+ *   /sdk              the static browser script
+ */
+const isPublic = createRouteMatcher([
+  '/login(.*)',
+  '/signup(.*)',
+  '/api/v1(.*)',
+  '/api/media(.*)',
+  '/widget(.*)',
+  '/sdk(.*)',
+])
 
-export function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl
-  const isPublic = PUBLIC.some((pattern) => pattern.test(pathname))
-  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value)
-
-  if (!hasSession && !isPublic) {
-    const login = new URL('/login', request.url)
-    login.searchParams.set('next', pathname)
-    return NextResponse.redirect(login)
-  }
-
-  if (hasSession && (pathname === '/login' || pathname === '/signup')) {
-    return NextResponse.redirect(new URL('/agents', request.url))
-  }
-
-  return NextResponse.next()
-}
+export default clerkMiddleware(async (auth, request) => {
+  if (isPublic(request)) return
+  await auth.protect()
+})
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|js)$).*)'],

@@ -2,9 +2,10 @@ import 'server-only'
 
 import { appendTurn, listTurns, setCallActivity } from '@/lib/store/calls'
 import { getAgentById } from '@/lib/store/agents'
+import { resolveSystemPrompt } from '@/lib/store/knowledge'
 import { resolveModelRoute, ModelRouteError, type ModelRoute, type ModelSource } from '@/lib/models/route'
 import type { ModelRef } from '@/lib/models/catalog'
-import type { CallRow } from '@/lib/store/types'
+import type { AgentRow, CallRow } from '@/lib/store/types'
 
 export interface CompleteResult {
   text: string
@@ -14,7 +15,11 @@ export interface CompleteResult {
   /** Where the choice came from: request, session, agent or platform. */
   source: ModelSource | 'none'
   fallback: boolean
+  /** The tool the model asked for, if any. The client executes it, not us. */
+  tool?: string
 }
+
+const BASE_PROMPT = 'You are a concise voice assistant.'
 
 export async function completeTurn(
   call: CallRow,
@@ -31,7 +36,13 @@ export async function completeTurn(
     role: turn.speaker === 'AGENT' ? 'assistant' : 'user',
     content: turn.text,
   }))
-  const system = agent?.system_prompt || 'You are a concise voice assistant.'
+  // Grounding text and tool declarations are composed in one place so the
+  // /knowledge screen and the runtime can never disagree.
+  const resolved = resolveSystemPrompt(
+    call.tenant_id,
+    call.agent_id,
+    agent?.system_prompt || BASE_PROMPT,
+  )
 
   let route: ModelRoute | undefined
   if (agent) {
@@ -45,12 +56,17 @@ export async function completeTurn(
     }
   }
 
-  const result = route ? await generateReply(route, system, messages) : fallbackReply(messages)
+  const result = route
+    ? await generateReply(route, resolved.system, messages)
+    : fallbackReply(messages)
+
 
   const llmMs = Date.now() - started
+  const tool = detectTool(result.text, resolved.toolNames)
   appendTurn(call, {
     speaker: 'AGENT',
     text: result.text,
+    tool,
     v2vMs: llmMs,
     llmMs,
     model: result.fallback ? undefined : result.label,
@@ -64,7 +80,44 @@ export async function completeTurn(
     provider: result.provider,
     source: result.source,
     fallback: result.fallback,
+    tool,
   }
+}
+
+/*
+ * A recorded intent, not an execution. The control plane never calls a tenant's
+ * endpoint during a turn: that would be a request-forgery surface and would need
+ * a secret store we do not have. The name lands on call_turns.tool and goes back
+ * to the client, which holds its own credentials and does the work.
+ */
+function detectTool(reply: string, toolNames: string[]): string | undefined {
+  if (toolNames.length === 0) return undefined
+  const haystack = reply.toLowerCase()
+  return toolNames.find((name) => haystack.includes(name.toLowerCase()))
+}
+
+/*
+ * The eval path. It takes the same route resolution and the same fetch a real
+ * turn takes, so the latency an eval reports is the latency a caller would get.
+ * It creates no call row: an eval is not traffic and must not reach the monitor.
+ */
+export async function replyForEval(input: {
+  tenantId: string
+  agent: AgentRow
+  system: string
+  utterance: string
+}): Promise<{ text: string; fallback: boolean }> {
+  const messages = [{ role: 'user', content: input.utterance }]
+  let route: ModelRoute | undefined
+  try {
+    route = resolveModelRoute({ tenantId: input.tenantId, agent: input.agent })
+  } catch (error) {
+    if (!(error instanceof ModelRouteError)) throw error
+  }
+  const result = route
+    ? await generateReply(route, input.system, messages)
+    : fallbackReply(messages)
+  return { text: result.text, fallback: result.fallback }
 }
 
 interface ReplyResult {

@@ -1,154 +1,140 @@
 import 'server-only'
 
-import { cookies } from 'next/headers'
+import { auth, currentUser } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
 import { getDb, now } from '@/lib/db'
-import { id, token } from '@/lib/db/ids'
-import { sha256 } from '@/lib/auth/password'
-import { SESSION_COOKIE } from '@/lib/auth/constants'
-import type { TenantRow, UserRow } from '@/lib/store/types'
-
-export { SESSION_COOKIE }
-
-const SESSION_MS = 14 * 24 * 60 * 60 * 1000
+import { id } from '@/lib/db/ids'
+import type { UserRow } from '@/lib/store/types'
 
 export interface AuthContext {
   user: { id: string; email: string; name: string }
   tenant: { id: string; name: string; slug: string; region: string }
 }
 
-export async function createSession(userId: string): Promise<string> {
-  const db = getDb()
-  const raw = token()
-  const created = now()
-  db.prepare(
-    `INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(id('ses'), userId, sha256(raw), created + SESSION_MS, created)
-
-  const jar = await cookies()
-  jar.set(SESSION_COOKIE, raw, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    expires: new Date(created + SESSION_MS),
-  })
-  return raw
+interface WorkspaceRow {
+  user_id: string
+  email: string
+  name: string
+  tenant_id: string
+  tenant_name: string
+  slug: string
+  region: string
 }
 
-export async function destroySession(): Promise<void> {
-  const jar = await cookies()
-  const raw = jar.get(SESSION_COOKIE)?.value
-  if (raw) {
-    getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(sha256(raw))
-  }
-  jar.delete(SESSION_COOKIE)
-}
+const WORKSPACE_SQL = `
+  SELECT u.id AS user_id, u.email, u.name,
+         t.id AS tenant_id, t.name AS tenant_name, t.slug, t.region
+  FROM users u
+  JOIN tenant_members m ON m.user_id = u.id
+  JOIN tenants t ON t.id = m.tenant_id
+  WHERE u.clerk_user_id = ?
+  LIMIT 1`
 
+/*
+ * Clerk owns identity, this app owns tenancy. Every page and action reads the
+ * tenant from here, so a Clerk user with no mirror row is provisioned on first
+ * sight rather than bounced back to sign-in.
+ */
 export async function getAuth(): Promise<AuthContext | null> {
-  const jar = await cookies()
-  const raw = jar.get(SESSION_COOKIE)?.value
-  if (!raw) return null
+  const { userId } = await auth()
+  if (!userId) return null
 
-  const row = getDb()
-    .prepare(
-      `SELECT u.id AS user_id, u.email, u.name,
-              t.id AS tenant_id, t.name AS tenant_name, t.slug, t.region,
-              s.expires_at
-       FROM sessions s
-       JOIN users u ON u.id = s.user_id
-       JOIN tenant_members m ON m.user_id = u.id
-       JOIN tenants t ON t.id = m.tenant_id
-       WHERE s.token_hash = ?
-       LIMIT 1`,
-    )
-    .get(sha256(raw)) as
-    | {
-        user_id: string
-        email: string
-        name: string
-        tenant_id: string
-        tenant_name: string
-        slug: string
-        region: string
-        expires_at: number
-      }
-    | undefined
+  const existing = read(userId)
+  if (existing) return existing
 
-  if (!row || row.expires_at < now()) {
-    if (row) getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(sha256(raw))
-    return null
-  }
+  await provision(userId)
+  return read(userId)
+}
 
+export async function requireAuth(): Promise<AuthContext> {
+  const context = await getAuth()
+  if (!context) redirect('/login')
+  return context
+}
+
+function read(clerkUserId: string): AuthContext | null {
+  const row = getDb().prepare(WORKSPACE_SQL).get(clerkUserId) as WorkspaceRow | undefined
+  if (!row) return null
   return {
     user: { id: row.user_id, email: row.email, name: row.name },
     tenant: { id: row.tenant_id, name: row.tenant_name, slug: row.slug, region: row.region },
   }
 }
 
-export async function requireAuth(): Promise<AuthContext> {
-  const auth = await getAuth()
-  if (!auth) redirect('/login')
-  return auth
-}
+/*
+ * First sign-in for a Clerk user. Two shapes arrive here: a genuinely new
+ * account, and an account whose email already owns a tenant, which is how the
+ * seeded demo workspace survives the move off password sign-in. Both end with
+ * one users row carrying the Clerk id, and one tenant membership.
+ */
+async function provision(clerkUserId: string): Promise<void> {
+  const clerkUser = await currentUser()
+  if (!clerkUser) return
 
-export function findUserByEmail(email: string): UserRow | undefined {
-  return getDb()
+  const email = primaryEmail(clerkUser)
+  if (!email) return
+  const name = displayName(clerkUser, email)
+
+  const db = getDb()
+  const claimed = db
     .prepare('SELECT * FROM users WHERE email = ?')
-    .get(email.toLowerCase()) as UserRow | undefined
+    .get(email) as UserRow | undefined
+
+  if (claimed?.clerk_user_id && claimed.clerk_user_id !== clerkUserId) return
+
+  const userId = claimed?.id ?? id('usr')
+  if (claimed) {
+    db.prepare('UPDATE users SET clerk_user_id = ?, name = ? WHERE id = ?').run(
+      clerkUserId,
+      name,
+      userId,
+    )
+  } else {
+    db.prepare(
+      'INSERT INTO users (id, clerk_user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(userId, clerkUserId, email, name, now())
+  }
+
+  const member = db
+    .prepare('SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1')
+    .get(userId)
+  if (!member) createTenant(userId, name)
 }
 
-export function insertUser(input: {
-  email: string
-  name: string
-  passwordHash: string
-  tenantName: string
-}): { user: UserRow; tenant: TenantRow } {
+function createTenant(userId: string, name: string): void {
   const db = getDb()
   const created = now()
-  const userId = id('usr')
   const tenantId = id('ten')
-  const slugBase = input.tenantName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'workspace'
-  let slug = slugBase
+  const tenantName = `${name.split(' ')[0]}'s Workspace`
+  const base =
+    tenantName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'workspace'
+  let slug = base
   let n = 1
-  while (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) {
-    slug = `${slugBase}-${++n}`
-  }
+  while (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) slug = `${base}-${++n}`
 
-  const insertUserStmt = db.prepare(
-    `INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+  db.prepare(
+    `INSERT INTO tenants (id, name, slug, region, owner_id, created_at)
+     VALUES (?, ?, ?, 'IN-SOUTH', ?, ?)`,
+  ).run(tenantId, tenantName, slug, userId, created)
+  db.prepare("INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (?, ?, 'owner')").run(
+    tenantId,
+    userId,
   )
-  const insertTenant = db.prepare(
-    `INSERT INTO tenants (id, name, slug, region, owner_id, created_at) VALUES (?, ?, ?, 'IN-SOUTH', ?, ?)`,
-  )
-  const insertMember = db.prepare(
-    `INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (?, ?, 'owner')`,
-  )
+}
 
-  insertUserStmt.run(userId, input.email.toLowerCase(), input.passwordHash, input.name, created)
-  insertTenant.run(tenantId, input.tenantName, slug, userId, created)
-  insertMember.run(tenantId, userId)
+type ClerkUser = NonNullable<Awaited<ReturnType<typeof currentUser>>>
 
-  return {
-    user: {
-      id: userId,
-      email: input.email.toLowerCase(),
-      password_hash: input.passwordHash,
-      name: input.name,
-      created_at: created,
-    },
-    tenant: {
-      id: tenantId,
-      name: input.tenantName,
-      slug,
-      region: 'IN-SOUTH',
-      owner_id: userId,
-      created_at: created,
-    },
-  }
+function primaryEmail(user: ClerkUser): string | null {
+  const primary = user.emailAddresses.find((address) => address.id === user.primaryEmailAddressId)
+  const address = primary?.emailAddress ?? user.emailAddresses[0]?.emailAddress
+  return address ? address.toLowerCase() : null
+}
+
+function displayName(user: ClerkUser, email: string): string {
+  const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
+  return full || email.split('@')[0]
 }
