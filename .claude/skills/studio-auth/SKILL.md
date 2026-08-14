@@ -46,11 +46,38 @@ Verified against Next 16 and Clerk's current Next.js guide: the package is
 to proxy; the code is identical to the middleware form), `auth()` from
 `@clerk/nextjs/server` is async, and `ClerkProvider` goes inside `<body>`.
 
-**Prerequisite that no agent can satisfy alone:** a Clerk application, and its keys in
-`.env.local` as `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`. Without
-them the app cannot boot signed-in, so the work stays on a branch until the keys exist.
-`npx -y clerk@latest init` sets up both, or take them from the Clerk dashboard. Never
-paste a key value into a transcript, a commit or a PR.
+**The prerequisite is done.** The Clerk application `Voice Studio`
+(`app_3HtyNkmMWhNyhFsXYktZgrLUICg`) exists on the `corkkam.info@gmail.com` account and
+this repo is linked to it. Development instance only; production is not created, and it
+stays that way while landmine 2 blocks a production deploy.
+
+A fresh clone gets its keys with the CLI, which never prints a value:
+
+```bash
+clerk whoami                       # confirms the link
+clerk env pull --file .env.local   # writes the two development keys
+```
+
+`.env.local` then holds `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`,
+`NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login` and `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/signup`.
+Never paste a key value into a transcript, a commit or a PR.
+
+The development instance is configured to match this app, with `clerk config patch`:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Identifier | email address, verified by code at sign-up | one identifier, same as the hand-rolled form |
+| Password | on and required, min 15, HIBP enforced | Clerk defaults; do not lower them |
+| First name | collected and required | `AuthContext.user.name` and the shell user menu need it |
+| Last name | collected, optional | |
+| Organizations | off | tenancy is the `tenants` table, not Clerk orgs |
+| Multi-session | off | one operator per browser |
+| Paths | sign-in `/login`, sign-up `/signup`, home `/agents` | keeps every existing link working |
+| Google | on, Clerk shared development credentials | development only; production needs our own client id |
+
+Read the live values with `clerk config pull`, change them with
+`clerk config patch --file <file> --dry-run` first. Vercel has no Clerk variable yet;
+add them to preview when the migration lands, production never until the datastore moves.
 
 ### Shape of the change
 

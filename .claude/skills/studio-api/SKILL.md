@@ -79,6 +79,26 @@ shown once and is unrecoverable. Never log, print or commit a full key. When you
 this file, check that `resolveApiKey` still rejects revoked keys and still stamps
 `last_used_at`.
 
+Tenant provider keys are a second, different thing, in `src/lib/store/credentials.ts`.
+They are encrypted rather than hashed, because a turn has to present them again. Only
+`useCredentialSecret` decrypts, and its result must never reach a response, a log line
+or a view model.
+
+## Choosing a model
+
+Four levels, first one set wins: request (`model` on `/api/media/complete`), session
+(`model` on `POST /api/v1/sessions`, or `PATCH /api/v1/sessions/[id]`), agent
+(`PATCH /api/v1/agents/[id]`), then the platform key. `src/lib/models/route.ts` is the
+only place that order lives.
+
+Choosing spends the tenant's own provider key, so it is a **secret-key capability**.
+`requireSecretKey(req)` guards every entry point, and a `vst_` session token is not
+enough even though it is enough to speak a turn. The studio's own operator session
+counts as privileged; the widget never does.
+
+Validate a reference with `assertRoutable` at configuration time. A caller who finds
+out mid-call that the key is missing is already speaking.
+
 ## SDKs
 
 Three clients ship against `/api/v1` and drift silently, because nothing type-checks

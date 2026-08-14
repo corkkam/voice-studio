@@ -67,10 +67,27 @@ function bootstrap(db: DatabaseSync) {
       system_prompt TEXT NOT NULL DEFAULT '',
       topology TEXT NOT NULL DEFAULT 'cascaded',
       version INTEGER NOT NULL DEFAULT 1,
+      model_provider TEXT NOT NULL DEFAULT '',
+      model_name TEXT NOT NULL DEFAULT '',
+      model_credential_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       published_at INTEGER,
       UNIQUE (tenant_id, slug)
+    );
+
+    CREATE TABLE IF NOT EXISTS provider_credentials (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      label TEXT NOT NULL,
+      base_url TEXT NOT NULL DEFAULT '',
+      secret_enc TEXT NOT NULL,
+      hint TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_used_at INTEGER,
+      revoked_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS api_keys (
@@ -102,7 +119,10 @@ function bootstrap(db: DatabaseSync) {
       barge_ins INTEGER NOT NULL DEFAULT 0,
       outcome TEXT,
       sentiment TEXT,
-      metadata_json TEXT
+      metadata_json TEXT,
+      model_provider TEXT,
+      model_name TEXT,
+      model_credential_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS call_turns (
@@ -116,7 +136,8 @@ function bootstrap(db: DatabaseSync) {
       v2v_ms INTEGER,
       stt_ms INTEGER,
       llm_ms INTEGER,
-      tts_ms INTEGER
+      tts_ms INTEGER,
+      model TEXT
     );
 
     CREATE TABLE IF NOT EXISTS session_tokens (
@@ -139,7 +160,32 @@ function bootstrap(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS idx_calls_tenant_ended ON calls(tenant_id, ended_at);
     CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_turns_call ON call_turns(call_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_credentials_tenant ON provider_credentials(tenant_id, revoked_at);
   `)
+
+  modelRoutingMigration(db)
+}
+
+/*
+ * CREATE TABLE IF NOT EXISTS above never touches a database that already exists, so
+ * the model routing columns arrive here for a local database seeded before the
+ * feature landed. Empty string means "no choice made", which resolves to the
+ * platform model.
+ */
+function modelRoutingMigration(db: DatabaseSync) {
+  addColumn(db, 'agents', 'model_provider', "TEXT NOT NULL DEFAULT ''")
+  addColumn(db, 'agents', 'model_name', "TEXT NOT NULL DEFAULT ''")
+  addColumn(db, 'agents', 'model_credential_id', 'TEXT')
+  addColumn(db, 'calls', 'model_provider', 'TEXT')
+  addColumn(db, 'calls', 'model_name', 'TEXT')
+  addColumn(db, 'calls', 'model_credential_id', 'TEXT')
+  addColumn(db, 'call_turns', 'model', 'TEXT')
+}
+
+function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  if (columns.some((c) => c.name === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
 }
 
 export function getDb(): DatabaseSync {

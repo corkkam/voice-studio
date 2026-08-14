@@ -12,13 +12,15 @@ export function OPTIONS(req: Request) {
 export async function GET(req: Request) {
   getDb()
   const key = requireApiKey(req)
-  if (!key) return apiError('Unauthorized', 401)
+  if (!key) return apiError('Unauthorized', 401, corsHeaders(req))
   const agents = listAgents(key.tenant_id).map((agent) => ({
     id: agent.id,
     name: agent.name,
     locale: agent.locale,
     status: agent.status,
     summary: agent.summary,
+    // The LLM slot of the pipeline triple, which is the model this agent runs on.
+    model: agent.pipeline[1],
   }))
   return json({ agents }, 200, corsHeaders(req))
 }

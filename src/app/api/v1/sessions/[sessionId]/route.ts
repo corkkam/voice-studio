@@ -1,6 +1,8 @@
 import { apiError, bearer, corsHeaders, json, readJson } from '@/lib/api/http'
-import { requireApiKey } from '@/lib/api/guard'
-import { endCall, getCall, resolveSessionToken, setCallActivity } from '@/lib/store/calls'
+import { requireApiKey, requireSecretKey } from '@/lib/api/guard'
+import { endCall, getCall, resolveSessionToken, setCallActivity, setCallModel } from '@/lib/store/calls'
+import { parseModelRef } from '@/lib/models/catalog'
+import { assertRoutable, ModelRouteError } from '@/lib/models/route'
 import type { CallActivity } from '@/lib/activity'
 
 export const runtime = 'nodejs'
@@ -33,6 +35,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ sessionId: stri
       activityDetail: call.activity_detail,
       channel: call.channel,
       startedAt: call.started_at,
+      model: call.model_provider ? `${call.model_provider}/${call.model_name}` : null,
     },
     200,
     corsHeaders(req),
@@ -43,9 +46,35 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ sessionId: st
   const { sessionId } = await ctx.params
   const call = loadCall(req, sessionId)
   if (!call) return apiError('Session not found', 404)
-  const body = await readJson<{ activity?: CallActivity; detail?: string }>(req)
+  const body = await readJson<{ activity?: CallActivity; detail?: string; model?: unknown }>(req)
   if (body.activity) setCallActivity(call, body.activity, body.detail || call.activity_detail)
-  return json({ ok: true }, 200, corsHeaders(req))
+
+  let model = call.model_provider ? `${call.model_provider}/${call.model_name}` : null
+  if (body.model !== undefined) {
+    // Switching mid-call spends the tenant's provider key, so a session token is
+    // not enough here even though it is enough to speak a turn.
+    const key = requireSecretKey(req)
+    if (!key || key.tenant_id !== call.tenant_id) {
+      return apiError('A secret key is required to switch the model.', 403)
+    }
+    if (body.model === null) {
+      setCallModel(call, null)
+      model = null
+    } else {
+      const ref = parseModelRef(body.model)
+      if (!ref) return apiError('model must be "provider/model" or { provider, model }')
+      try {
+        assertRoutable(call.tenant_id, ref)
+      } catch (error) {
+        if (error instanceof ModelRouteError) return apiError(error.message, 422)
+        throw error
+      }
+      setCallModel(call, ref)
+      model = `${ref.provider}/${ref.model}`
+    }
+  }
+
+  return json({ ok: true, model }, 200, corsHeaders(req))
 }
 
 export async function DELETE(req: Request, ctx: { params: Promise<{ sessionId: string }> }) {
