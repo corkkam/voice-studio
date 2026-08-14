@@ -7,5 +7,7 @@ next-env.d.ts
 .env*.local
 .vercel
 .env*
+# Names only, no values. The .env* rule above would otherwise hide it.
+!.env.example
 /data
 *.db
