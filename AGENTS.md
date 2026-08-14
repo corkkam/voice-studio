@@ -54,7 +54,8 @@ is a decision to raise, not a dependency to install.
 | Auth, humans | Clerk (`@clerk/nextjs`) | Landed. `clerkMiddleware()` in `src/proxy.ts` is the gate, `getAuth()` in `src/lib/auth/session.ts` turns a Clerk user into a tenant. There is no password path left. |
 | Auth, machines | Our API keys | `vs_sk_live_`, `vs_pk_live_`, `vst_`. Stays ours after the Clerk migration. Clerk never guards `/api/v1`. |
 | Realtime | SSE plus an in-process hub | `src/lib/realtime/hub.ts`. No WebSocket server, no Redis, no third-party realtime service. |
-| Model calls | One `fetch` in `src/lib/media/complete.ts` | If streaming or a second provider is needed, move that one file to the AI SDK through Vercel AI Gateway. Never add a provider SDK per call site. |
+| Model calls | One `fetch` in `src/lib/media/complete.ts` | Every provider in `src/lib/models/catalog.ts` speaks the OpenAI chat-completions shape, which is what keeps it one fetch. A provider that needs its own body shape is a decision to raise, not an entry to add. If streaming is needed, move that one file to the AI SDK through Vercel AI Gateway. Never add a provider SDK per call site. |
+| Model routing | `src/lib/models/route.ts` | Request, then session, then agent, then the platform key. Choosing a model spends the tenant's own provider key, so it is a secret-key capability: never let a publishable key or a `vst_` token reach it. |
 | Hosting | Vercel | Fluid compute, the default. Never `runtime = 'edge'`; the app needs Node APIs. |
 | Logging | `console.error` on the server | No observability vendor until there is production traffic to observe. |
 
@@ -168,6 +169,12 @@ Each of these has already cost time. None is visible from the code you are editi
    on-screen orbs to a static frame past 24 visible cards, so a wallboard degrades to
    stillness instead of jank. Never add a continuously repainting CSS animation
    anywhere near the monitor.
+9. **Tenant provider keys are encrypted, not hashed.** `src/lib/db/secrets.ts` wraps
+   them with AES-256-GCM under `CREDENTIAL_SECRET`, because a turn has to present the
+   key again. Rotating that variable makes every stored key undecryptable and there is
+   no re-wrap path, so every tenant has to add its keys again. Say that before you
+   rotate it. `useCredentialSecret` is the only function that decrypts; never return
+   its result in a response, a log line or a view model.
 
 ## 7. Conventions
 

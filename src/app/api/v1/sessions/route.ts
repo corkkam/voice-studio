@@ -4,6 +4,8 @@ import { createCall } from '@/lib/store/calls'
 import { getAgentRow } from '@/lib/store/agents'
 import { resolveVoice } from '@/lib/store/voices'
 import { policyOrEmpty } from '@/lib/store/policies'
+import { parseModelRef, type ModelRef } from '@/lib/models/catalog'
+import { assertRoutable, ModelRouteError } from '@/lib/models/route'
 import type { CallChannel } from '@/lib/store/types'
 
 export const runtime = 'nodejs'
@@ -22,6 +24,7 @@ export async function POST(req: Request) {
     display?: string
     locale?: string
     metadata?: Record<string, unknown>
+    model?: unknown
   }>(req)
 
   if (!body.agentId) return apiError('agentId is required')
@@ -40,6 +43,22 @@ export async function POST(req: Request) {
     return apiError('Publishable keys cannot open API sessions. Use a secret key.', 403)
   }
 
+  let model: ModelRef | undefined
+  if (body.model !== undefined && body.model !== null) {
+    if (key.kind !== 'secret') {
+      return apiError('Publishable keys cannot choose a model. Use a secret key.', 403)
+    }
+    model = parseModelRef(body.model)
+    if (!model) return apiError('model must be "provider/model" or { provider, model }')
+    // Fail here rather than on the first turn, when a caller is already speaking.
+    try {
+      assertRoutable(key.tenant_id, model)
+    } catch (error) {
+      if (error instanceof ModelRouteError) return apiError(error.message, 422)
+      throw error
+    }
+  }
+
   const { call, sessionToken } = createCall({
     tenantId: key.tenant_id,
     agentId: agent.id,
@@ -47,6 +66,7 @@ export async function POST(req: Request) {
     display: body.display,
     locale: body.locale,
     metadata: { ...body.metadata, origin: req.headers.get('origin') },
+    model,
   })
 
   // Additive fields only. Three SDKs and the widget ship against this shape, so
@@ -66,6 +86,7 @@ export async function POST(req: Request) {
         locale: agent.locale,
         prompt: agent.system_prompt,
         version: agent.version,
+        model: agent.model_provider ? `${agent.model_provider}/${agent.model_name}` : null,
       },
       // The client resolves this against a real device voice. There is no
       // server-side TTS to apply it for them.
@@ -81,8 +102,10 @@ export async function POST(req: Request) {
         : null,
       // Recorded intent. The client must play it; nothing here can enforce that.
       disclosure: policy.disclosure || null,
+      model: model ? `${model.provider}/${model.model}` : null,
       eventsUrl: `${base}/api/v1/sessions/${call.id}/events?token=${encodeURIComponent(sessionToken)}`,
       completeUrl: `${base}/api/media/complete`,
+      // The session resource. DELETE ends it, PATCH switches its model mid-call.
       hangupUrl: `${base}/api/v1/sessions/${call.id}`,
     },
     201,

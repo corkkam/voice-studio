@@ -3,12 +3,17 @@ import 'server-only'
 import { appendTurn, listTurns, setCallActivity } from '@/lib/store/calls'
 import { getAgentById } from '@/lib/store/agents'
 import { resolveSystemPrompt } from '@/lib/store/knowledge'
-import type { CallRow } from '@/lib/store/types'
+import { resolveModelRoute, ModelRouteError, type ModelRoute, type ModelSource } from '@/lib/models/route'
+import type { ModelRef } from '@/lib/models/catalog'
+import type { AgentRow, CallRow } from '@/lib/store/types'
 
 export interface CompleteResult {
   text: string
   llmMs: number
   model: string
+  provider: string
+  /** Where the choice came from: request, session, agent or platform. */
+  source: ModelSource | 'none'
   fallback: boolean
   /** The tool the model asked for, if any. The client executes it, not us. */
   tool?: string
@@ -16,13 +21,21 @@ export interface CompleteResult {
 
 const BASE_PROMPT = 'You are a concise voice assistant.'
 
-export async function completeTurn(call: CallRow, userText: string): Promise<CompleteResult> {
+export async function completeTurn(
+  call: CallRow,
+  userText: string,
+  override?: ModelRef,
+): Promise<CompleteResult> {
   const started = Date.now()
   setCallActivity(call, 'thinking', 'generating reply')
   appendTurn(call, { speaker: 'CALLER', text: userText, activity: 'thinking', activityDetail: 'generating reply' })
 
   const agent = getAgentById(call.agent_id)
   const history = listTurns(call.id)
+  const messages = history.map((turn) => ({
+    role: turn.speaker === 'AGENT' ? 'assistant' : 'user',
+    content: turn.text,
+  }))
   // Grounding text and tool declarations are composed in one place so the
   // /knowledge screen and the runtime can never disagree.
   const resolved = resolveSystemPrompt(
@@ -30,13 +43,24 @@ export async function completeTurn(call: CallRow, userText: string): Promise<Com
     call.agent_id,
     agent?.system_prompt || BASE_PROMPT,
   )
-  const result = await generateReply({
-    system: resolved.system,
-    messages: history.map((turn) => ({
-      role: turn.speaker === 'AGENT' ? 'assistant' : 'user',
-      content: turn.text,
-    })),
-  })
+
+  let route: ModelRoute | undefined
+  if (agent) {
+    const chosen = Boolean(override || (call.model_provider && call.model_name) || agent.model_provider)
+    try {
+      route = resolveModelRoute({ tenantId: call.tenant_id, agent, call, override })
+    } catch (error) {
+      // A tenant that picked a model must see why it did not run. A tenant that
+      // picked nothing gets the fallback line instead of a failed call.
+      if (chosen || !(error instanceof ModelRouteError)) throw error
+    }
+  }
+
+  const result = route
+    ? await generateReply(route, resolved.system, messages)
+    : fallbackReply(messages)
+
+
   const llmMs = Date.now() - started
   const tool = detectTool(result.text, resolved.toolNames)
   appendTurn(call, {
@@ -45,10 +69,19 @@ export async function completeTurn(call: CallRow, userText: string): Promise<Com
     tool,
     v2vMs: llmMs,
     llmMs,
+    model: result.fallback ? undefined : result.label,
     activity: 'speaking',
-    activityDetail: result.fallback ? 'fallback reply' : `${result.model} · ${llmMs} ms`,
+    activityDetail: result.fallback ? 'fallback reply' : `${result.label} ${llmMs} ms`,
   })
-  return { ...result, llmMs, tool }
+  return {
+    text: result.text,
+    llmMs,
+    model: result.model,
+    provider: result.provider,
+    source: result.source,
+    fallback: result.fallback,
+    tool,
+  }
 }
 
 /*
@@ -63,40 +96,89 @@ function detectTool(reply: string, toolNames: string[]): string | undefined {
   return toolNames.find((name) => haystack.includes(name.toLowerCase()))
 }
 
-export async function generateReply(input: {
+/*
+ * The eval path. It takes the same route resolution and the same fetch a real
+ * turn takes, so the latency an eval reports is the latency a caller would get.
+ * It creates no call row: an eval is not traffic and must not reach the monitor.
+ */
+export async function replyForEval(input: {
+  tenantId: string
+  agent: AgentRow
   system: string
-  messages: { role: string; content: string }[]
-}): Promise<{ text: string; model: string; fallback: boolean }> {
-  const key = process.env.XAI_API_KEY
-  if (!key) {
-    const last = input.messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
-    return {
-      text: `I heard you. ${last ? `You said: “${last.slice(0, 180)}”. ` : ''}Configure XAI_API_KEY on the control plane to get a live model reply.`,
-      model: 'fallback',
-      fallback: true,
-    }
+  utterance: string
+}): Promise<{ text: string; fallback: boolean }> {
+  const messages = [{ role: 'user', content: input.utterance }]
+  let route: ModelRoute | undefined
+  try {
+    route = resolveModelRoute({ tenantId: input.tenantId, agent: input.agent })
+  } catch (error) {
+    if (!(error instanceof ModelRouteError)) throw error
   }
+  const result = route
+    ? await generateReply(route, input.system, messages)
+    : fallbackReply(messages)
+  return { text: result.text, fallback: result.fallback }
+}
 
-  const res = await fetch('https://api.x.ai/v1/chat/completions', {
+interface ReplyResult {
+  text: string
+  model: string
+  provider: string
+  label: string
+  source: ModelSource | 'none'
+  fallback: boolean
+}
+
+/**
+ * One fetch for every provider. They all speak the OpenAI chat-completions shape,
+ * which is the reason the catalogue is restricted to providers that do.
+ */
+async function generateReply(
+  route: ModelRoute,
+  system: string,
+  messages: { role: string; content: string }[],
+): Promise<ReplyResult> {
+  const res = await fetch(`${route.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${route.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'grok-4.6',
-      messages: [{ role: 'system', content: input.system }, ...input.messages],
+      model: route.model,
+      messages: [{ role: 'system', content: system }, ...messages],
       stream: false,
     }),
   })
   if (!res.ok) {
-    const detail = await res.text()
-    throw new Error(`Language model request failed (${res.status}): ${detail.slice(0, 200)}`)
+    // A provider error body can carry vendor detail and echo the request, so it
+    // stays in the server log and the caller gets the status only.
+    console.error('model request failed', route.provider, res.status, (await res.text()).slice(0, 400))
+    throw new Error(`Model request failed (${res.status}).`)
   }
   const body = (await res.json()) as {
     choices?: { message?: { content?: string } }[]
   }
   const text = body.choices?.[0]?.message?.content?.trim()
-  if (!text) throw new Error('Language model returned an empty reply.')
-  return { text, model: 'grok-4.6', fallback: false }
+  if (!text) throw new Error('The model returned an empty reply.')
+  return {
+    text,
+    model: route.model,
+    provider: route.provider,
+    label: route.label,
+    source: route.source,
+    fallback: false,
+  }
+}
+
+function fallbackReply(messages: { role: string; content: string }[]): ReplyResult {
+  const last = messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
+  return {
+    text: `I heard you. ${last ? `You said: "${last.slice(0, 180)}". ` : ''}Connect a model key in the studio to get a live reply.`,
+    model: 'fallback',
+    provider: 'none',
+    label: 'fallback',
+    source: 'none',
+    fallback: true,
+  }
 }

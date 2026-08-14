@@ -114,8 +114,44 @@ curl -X POST http://localhost:3000/api/v1/sessions \
 - Widget preview: `/widget/[agentId]`
 
 Turn audio stays on the device (Web Speech / AVSpeech). The control plane records the
-session and completes the LLM turn at `/api/media/complete`. Set `XAI_API_KEY` for a
-live model; otherwise sessions still connect and return a fallback reply.
+session and completes the LLM turn at `/api/media/complete`.
+
+### Bring your own model keys
+
+A tenant stores its own provider keys under **Keys**. They are encrypted with
+`CREDENTIAL_SECRET`, never hashed, because every turn has to present them again. Every
+provider in the catalogue speaks the OpenAI chat-completions shape, which covers hosted
+vendors, Hugging Face, and any self-hosted checkpoint behind vLLM, Ollama, TGI or LM
+Studio under the `custom` provider with your own base URL. Model ids are free text, so
+an arbitrary open-weight repo works without a code change.
+
+One model is chosen at four levels, and the first one set wins:
+
+| Level | Set it with | Lives for |
+| --- | --- | --- |
+| request | `model` on `POST /api/media/complete` | one turn |
+| session | `model` on `POST /api/v1/sessions`, or `PATCH /api/v1/sessions/{id}` | the rest of the call |
+| agent | the builder, or `PATCH /api/v1/agents/{id}` | every session opened after it |
+| platform | `XAI_API_KEY` on the control plane | tenants that brought no key |
+
+```bash
+# what this tenant can switch to
+curl http://localhost:3000/api/v1/models -H "Authorization: Bearer vs_sk_live_…"
+
+# open a session on a specific model, then switch mid-call
+curl -X POST http://localhost:3000/api/v1/sessions \
+  -H "Authorization: Bearer vs_sk_live_…" -H "Content-Type: application/json" \
+  -d '{"agentId":"agt_…","channel":"api","model":"groq/llama-3.1-8b-instant"}'
+
+curl -X PATCH http://localhost:3000/api/v1/sessions/call_… \
+  -H "Authorization: Bearer vs_sk_live_…" -H "Content-Type: application/json" \
+  -d '{"model":"huggingface/Qwen/Qwen2.5-7B-Instruct"}'
+```
+
+Choosing a model spends the tenant's provider key, so it is a secret-key capability. A
+publishable key and a `vst_` session token can speak turns but cannot pick the model,
+and the widget always runs whatever the agent is set to. Without any key at all,
+sessions still connect and return a fallback reply.
 
 Reserved nav slots without screens yet — Voices, Knowledge & tools, Numbers & SIP,
 Evals, Compliance — stay inert. **Keys** is a real page.

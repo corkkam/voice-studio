@@ -2,7 +2,7 @@ import 'server-only'
 
 import { getDb, now, row, rows } from '@/lib/db'
 import { id } from '@/lib/db/ids'
-import { generateReply } from '@/lib/media/complete'
+import { replyForEval } from '@/lib/media/complete'
 import { resolveSystemPrompt } from '@/lib/store/knowledge'
 import { getAgentRow } from '@/lib/store/agents'
 import type { AssertionKind, EvalCaseRow, EvalResultRow, EvalRunRow } from '@/lib/store/types'
@@ -150,9 +150,11 @@ export async function runSuite(tenantId: string, agentId: string): Promise<RunOu
     let detail = ''
     let ok = false
     try {
-      const result = await generateReply({
+      const result = await replyForEval({
+        tenantId,
+        agent,
         system: resolved.system,
-        messages: [{ role: 'user', content: testCase.utterance }],
+        utterance: testCase.utterance,
       })
       reply = result.text
       const verdict = score(testCase, reply, Date.now() - began)

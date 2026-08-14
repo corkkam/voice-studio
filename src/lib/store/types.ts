@@ -39,6 +39,10 @@ export interface AgentRow {
   topology: 'cascaded' | 's2s'
   voice_id: string | null
   version: number
+  /** Empty means no choice made, which resolves to the platform model. */
+  model_provider: string
+  model_name: string
+  model_credential_id: string | null
   created_at: number
   updated_at: number
   published_at: number | null
@@ -74,6 +78,10 @@ export interface CallRow {
   outcome: string | null
   sentiment: 'up' | 'down' | 'flat' | null
   metadata_json: string | null
+  /** Set when the session overrides the agent's model. Null follows the agent. */
+  model_provider: string | null
+  model_name: string | null
+  model_credential_id: string | null
 }
 
 export interface TurnRow {
@@ -88,7 +96,26 @@ export interface TurnRow {
   stt_ms: number | null
   llm_ms: number | null
   tts_ms: number | null
+  /** provider/model that produced an agent turn, for the audit trail. */
+  model: string | null
 }
+
+export interface ProviderCredentialRow {
+  id: string
+  tenant_id: string
+  provider: string
+  label: string
+  base_url: string
+  secret_enc: string
+  hint: string
+  created_at: number
+  updated_at: number
+  last_used_at: number | null
+  revoked_at: number | null
+}
+
+/** What leaves the store. The encrypted secret never does. */
+export type ProviderCredential = Omit<ProviderCredentialRow, 'secret_enc'>
 
 export interface CampaignRow {
   id: string
