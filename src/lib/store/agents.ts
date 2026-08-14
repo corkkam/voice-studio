@@ -50,6 +50,9 @@ export function createAgent(
     system_prompt: (input.prompt || DEFAULT_PROMPT).trim(),
     topology: 'cascaded',
     version: 1,
+    model_provider: '',
+    model_name: '',
+    model_credential_id: null,
     created_at: created,
     updated_at: created,
     published_at: null,
@@ -58,8 +61,9 @@ export function createAgent(
     `INSERT INTO agents (
       id, tenant_id, name, slug, locale, locale_tone, summary, status,
       pipeline_json, series, carrier, system_prompt, topology, version,
+      model_provider, model_name, model_credential_id,
       created_at, updated_at, published_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.tenant_id,
@@ -75,6 +79,9 @@ export function createAgent(
     row.system_prompt,
     row.topology,
     row.version,
+    row.model_provider,
+    row.model_name,
+    row.model_credential_id,
     row.created_at,
     row.updated_at,
     row.published_at,
@@ -85,7 +92,19 @@ export function createAgent(
 export function updateAgent(
   tenantId: string,
   agentId: string,
-  patch: Partial<Pick<AgentRow, 'name' | 'summary' | 'locale' | 'system_prompt' | 'status'>>,
+  patch: Partial<
+    Pick<
+      AgentRow,
+      | 'name'
+      | 'summary'
+      | 'locale'
+      | 'system_prompt'
+      | 'status'
+      | 'model_provider'
+      | 'model_name'
+      | 'model_credential_id'
+    >
+  >,
 ): AgentRow | undefined {
   const existing = getAgentRow(tenantId, agentId)
   if (!existing) return undefined
@@ -95,6 +114,12 @@ export function updateAgent(
     locale: patch.locale?.trim() || existing.locale,
     system_prompt: patch.system_prompt ?? existing.system_prompt,
     status: (patch.status || existing.status) as AgentStatus,
+    // An empty string is a real value here: it clears the choice back to the
+    // platform model, so these read through `??` rather than `||`.
+    model_provider: patch.model_provider ?? existing.model_provider,
+    model_name: patch.model_name ?? existing.model_name,
+    model_credential_id:
+      patch.model_credential_id !== undefined ? patch.model_credential_id : existing.model_credential_id,
     updated_at: now(),
     published_at:
       patch.status === 'live' && existing.status !== 'live' ? now() : existing.published_at,
@@ -103,7 +128,8 @@ export function updateAgent(
   getDb()
     .prepare(
       `UPDATE agents SET name = ?, summary = ?, locale = ?, system_prompt = ?,
-       status = ?, updated_at = ?, published_at = ?, version = ?
+       status = ?, model_provider = ?, model_name = ?, model_credential_id = ?,
+       updated_at = ?, published_at = ?, version = ?
        WHERE id = ? AND tenant_id = ?`,
     )
     .run(
@@ -112,6 +138,9 @@ export function updateAgent(
       next.locale,
       next.system_prompt,
       next.status,
+      next.model_provider,
+      next.model_name,
+      next.model_credential_id,
       next.updated_at,
       next.published_at,
       next.version,
@@ -133,7 +162,9 @@ export function toAgent(row: AgentRow): Agent {
     status: row.status,
     pipeline: [
       pipeline[1]?.model || 'STT',
-      pipeline[2]?.model || 'LLM',
+      // The stage default in pipeline_json is frozen at creation, so the chosen
+      // model wins here or the list shows a model the agent no longer runs.
+      row.model_name || pipeline[2]?.model || 'LLM',
       pipeline[3]?.model || 'TTS',
     ],
     series: row.series,

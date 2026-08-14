@@ -6,6 +6,7 @@ import { sha256 } from '@/lib/auth/password'
 import { publish } from '@/lib/realtime/hub'
 import { formatElapsed, type EndedCall, type LiveCall } from '@/lib/data/calls'
 import type { CallActivity } from '@/lib/activity'
+import type { ModelRef } from '@/lib/models/catalog'
 import type { CallChannel, CallRow, TurnRow } from '@/lib/store/types'
 import { getAgentById } from '@/lib/store/agents'
 
@@ -16,6 +17,8 @@ export interface CreateCallInput {
   display?: string
   locale?: string
   metadata?: Record<string, unknown>
+  /** Overrides the agent's model for this session only. */
+  model?: ModelRef
 }
 
 export interface CreatedCall {
@@ -47,8 +50,9 @@ export function createCall(input: CreateCallInput): CreatedCall {
   db.prepare(
     `INSERT INTO calls (
       id, tenant_id, agent_id, channel, display, locale, status, activity,
-      activity_detail, started_at, ended_at, v2v_ms, barge_ins, outcome, sentiment, metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, 'live', 'connecting', ?, ?, NULL, NULL, 0, NULL, 'flat', ?)`,
+      activity_detail, started_at, ended_at, v2v_ms, barge_ins, outcome, sentiment, metadata_json,
+      model_provider, model_name, model_credential_id
+    ) VALUES (?, ?, ?, ?, ?, ?, 'live', 'connecting', ?, ?, NULL, NULL, 0, NULL, 'flat', ?, ?, ?, ?)`,
   ).run(
     callId,
     input.tenantId,
@@ -59,6 +63,9 @@ export function createCall(input: CreateCallInput): CreatedCall {
     `${input.channel} · connecting`,
     created,
     input.metadata ? JSON.stringify(input.metadata) : null,
+    input.model?.provider ?? null,
+    input.model?.model ?? null,
+    input.model?.credentialId ?? null,
   )
   db.prepare(
     `INSERT INTO session_tokens (token_hash, call_id, tenant_id, expires_at) VALUES (?, ?, ?, ?)`,
@@ -131,6 +138,7 @@ export function appendTurn(
     tool?: string
     v2vMs?: number
     llmMs?: number
+    model?: string
     activity?: CallActivity
     activityDetail?: string
   },
@@ -152,10 +160,11 @@ export function appendTurn(
     stt_ms: null,
     llm_ms: input.llmMs ?? null,
     tts_ms: null,
+    model: input.model ?? null,
   }
   db.prepare(
-    `INSERT INTO call_turns (id, call_id, seq, at_ms, speaker, text, tool, v2v_ms, stt_ms, llm_ms, tts_ms)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO call_turns (id, call_id, seq, at_ms, speaker, text, tool, v2v_ms, stt_ms, llm_ms, tts_ms, model)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     turn.id,
     turn.call_id,
@@ -168,6 +177,7 @@ export function appendTurn(
     turn.stt_ms,
     turn.llm_ms,
     turn.tts_ms,
+    turn.model,
   )
 
   const activity = input.activity ?? (input.speaker === 'CALLER' ? 'thinking' : 'speaking')
@@ -180,6 +190,17 @@ export function appendTurn(
   publish(call.tenant_id, { type: 'turn', callId: call.id })
   publish(call.tenant_id, { type: 'call.upsert', callId: call.id })
   return turn
+}
+
+/** Switches the model for the rest of a live session. The turns already spoken keep theirs. */
+export function setCallModel(call: CallRow, model: ModelRef | null): CallRow | undefined {
+  getDb()
+    .prepare(
+      `UPDATE calls SET model_provider = ?, model_name = ?, model_credential_id = ? WHERE id = ?`,
+    )
+    .run(model?.provider ?? null, model?.model ?? null, model?.credentialId ?? null, call.id)
+  publish(call.tenant_id, { type: 'call.upsert', callId: call.id })
+  return getCall(call.tenant_id, call.id)
 }
 
 export function setCallActivity(call: CallRow, activity: CallActivity, detail: string): void {

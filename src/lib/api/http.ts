@@ -2,8 +2,9 @@ export function json(data: unknown, status = 200, extra?: HeadersInit): Response
   return Response.json(data, { status, headers: extra })
 }
 
-export function apiError(message: string, status = 400): Response {
-  return json({ error: message }, status)
+/** Public routes must pass `corsHeaders(req)` here too, or the widget sees a CORS error instead of the reason. */
+export function apiError(message: string, status = 400, extra?: HeadersInit): Response {
+  return json({ error: message }, status, extra)
 }
 
 export function corsHeaders(req: Request): HeadersInit {
