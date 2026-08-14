@@ -54,7 +54,13 @@ function hashPassword(password) {
 
 async function serverUp() {
   try {
-    const res = await fetch(`${BASE}/api/v1/sessions`, { method: 'POST' })
+    // A rejected key still reaches the key lookup, which opens the database and
+    // creates the schema. A request with no Authorization header is refused
+    // before any query runs, so it would never bootstrap anything.
+    const res = await fetch(`${BASE}/api/v1/sessions`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer vs_sk_live_seed_bootstrap_probe' },
+    })
     return res.status === 401
   } catch {
     return false
