@@ -48,6 +48,14 @@ export function studioMetrics(tenantId: string): StudioMetric[] {
   ]
 }
 
+/** Lifetime call count per agent, for the compliance table. */
+export function countCallsByAgent(tenantId: string): Record<string, number> {
+  const found = getDb()
+    .prepare('SELECT agent_id, COUNT(*) AS n FROM calls WHERE tenant_id = ? GROUP BY agent_id')
+    .all(tenantId) as { agent_id: string; n: number }[]
+  return Object.fromEntries(found.map((item) => [item.agent_id, Number(item.n) || 0]))
+}
+
 export function mediaPlane(tenantId: string) {
   const live = countLive(tenantId)
   return {

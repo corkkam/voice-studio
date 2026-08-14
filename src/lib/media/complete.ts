@@ -2,6 +2,7 @@ import 'server-only'
 
 import { appendTurn, listTurns, setCallActivity } from '@/lib/store/calls'
 import { getAgentById } from '@/lib/store/agents'
+import { resolveSystemPrompt } from '@/lib/store/knowledge'
 import type { CallRow } from '@/lib/store/types'
 
 export interface CompleteResult {
@@ -9,7 +10,11 @@ export interface CompleteResult {
   llmMs: number
   model: string
   fallback: boolean
+  /** The tool the model asked for, if any. The client executes it, not us. */
+  tool?: string
 }
+
+const BASE_PROMPT = 'You are a concise voice assistant.'
 
 export async function completeTurn(call: CallRow, userText: string): Promise<CompleteResult> {
   const started = Date.now()
@@ -18,26 +23,47 @@ export async function completeTurn(call: CallRow, userText: string): Promise<Com
 
   const agent = getAgentById(call.agent_id)
   const history = listTurns(call.id)
+  // Grounding text and tool declarations are composed in one place so the
+  // /knowledge screen and the runtime can never disagree.
+  const resolved = resolveSystemPrompt(
+    call.tenant_id,
+    call.agent_id,
+    agent?.system_prompt || BASE_PROMPT,
+  )
   const result = await generateReply({
-    system: agent?.system_prompt || 'You are a concise voice assistant.',
+    system: resolved.system,
     messages: history.map((turn) => ({
       role: turn.speaker === 'AGENT' ? 'assistant' : 'user',
       content: turn.text,
     })),
   })
   const llmMs = Date.now() - started
+  const tool = detectTool(result.text, resolved.toolNames)
   appendTurn(call, {
     speaker: 'AGENT',
     text: result.text,
+    tool,
     v2vMs: llmMs,
     llmMs,
     activity: 'speaking',
     activityDetail: result.fallback ? 'fallback reply' : `${result.model} · ${llmMs} ms`,
   })
-  return { ...result, llmMs }
+  return { ...result, llmMs, tool }
 }
 
-async function generateReply(input: {
+/*
+ * A recorded intent, not an execution. The control plane never calls a tenant's
+ * endpoint during a turn: that would be a request-forgery surface and would need
+ * a secret store we do not have. The name lands on call_turns.tool and goes back
+ * to the client, which holds its own credentials and does the work.
+ */
+function detectTool(reply: string, toolNames: string[]): string | undefined {
+  if (toolNames.length === 0) return undefined
+  const haystack = reply.toLowerCase()
+  return toolNames.find((name) => haystack.includes(name.toLowerCase()))
+}
+
+export async function generateReply(input: {
   system: string
   messages: { role: string; content: string }[]
 }): Promise<{ text: string; model: string; fallback: boolean }> {
