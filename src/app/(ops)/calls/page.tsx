@@ -4,12 +4,12 @@ import { useCallback, useState } from 'react'
 import { LiveCallGrid, type FilterKey } from '@/components/ops/LiveCallGrid'
 import { MonitorHeader } from '@/components/ops/MonitorHeader'
 import { EndedCallsStrip } from '@/components/ops/EndedCallsStrip'
-import { TOTAL_LIVE } from '@/lib/data/callStore'
+import { useLiveFeed } from '@/lib/runtime'
 
 export default function LiveCallsPage() {
+  const { liveCount } = useLiveFeed()
   const [filterKey, setFilterKey] = useState<FilterKey>('all')
-  const [counts, setCounts] = useState({ total: TOTAL_LIVE, slow: 0, negative: 0 })
-
+  const [counts, setCounts] = useState({ total: liveCount, slow: 0, negative: 0 })
   const onCounts = useCallback((next: typeof counts) => setCounts(next), [])
 
   return (

@@ -7,13 +7,21 @@ watch them run on Indian PSTN, and audit what they said. Implemented from the
 
 ```bash
 pnpm install
-pnpm dev        # http://localhost:3000
+pnpm dev        # http://localhost:3000 — create a workspace at /signup
+pnpm seed       # or: demo tenant, published agent, key pair, live calls
+pnpm session    # a Clerk session cookie for the seeded user, for scripted checks
 pnpm build      # production build
 pnpm typecheck
 ```
 
+`pnpm seed` creates the demo operator as a real Clerk user, prints the login and a fresh
+API key pair, and drives its calls through the public API so the monitor has real traffic.
+It needs the Clerk development keys in `.env.local`: `clerk env pull --file .env.local`. `SEED_CALLS=40 pnpm seed` fills the grid.
+Local state is `data/voice-studio.db`; deleting it is the supported reset.
+
 For the architecture, decision log, unit economics and staged plan, see the CTO
-briefing pack in [`docs/`](./docs/README.md).
+briefing pack in [`docs/`](./docs/README.md). Working on the code: read
+[`AGENTS.md`](./AGENTS.md) first — it carries the landmines and the repo skills.
 
 ## Surfaces
 
@@ -66,11 +74,9 @@ gate.
 
 The monitor is built so a busy hour cannot take the tab down.
 
-- **Nothing off-viewport is materialised.** `src/lib/data/callStore.ts` synthesises a
-  call from a deterministic seed on demand; `src/lib/useVirtualGrid.ts` windows the
-  grid to the visible rows plus a small overscan. Verified: **24 cards, 24 canvases
-  and 944 DOM tags at 1,284 live calls — and identical at 250,000.** Cost tracks the
-  viewport, not the fleet.
+- **Nothing off-viewport is materialised.** Live sessions come from SQLite; the
+  monitor subscribes over SSE. `src/lib/useVirtualGrid.ts` still windows the grid
+  to the visible rows plus a small overscan, so render cost tracks the viewport.
 - **Orb budget.** Each orb is a real 2D-canvas animation. The library already pauses
   offscreen instances; above `LIVE_ORB_BUDGET` cards *on* screen the orbs render a
   static frame, so a 4K wallboard degrades to stillness rather than to jank. State is
@@ -85,14 +91,70 @@ The monitor is built so a busy hour cannot take the tab down.
   whole ops shell — the nav meter and the monitor's ± stepper read the same number, and
   utilisation goes amber before red so you scale up before calls queue.
 
-The campaign table (18,204 rows) is windowed the same way.
+The campaign table is windowed the same way once a licensed dialer fills it.
 
-## Swapping in a real backend
+## Auth, data, and connecting agents
 
-`callStore.ts` deliberately has the shape a real API would: `countCalls(filter)` and
-`sliceCalls(offset, limit, filter)`. Replacing the generator with fetches against a
-server-side count is a one-file change; nothing above it knows the difference. The
-per-surface fixtures in `src/lib/data/` are typed so the same is true of the rest.
+The studio is no longer fixture-driven. Sign up creates a tenant. Agents, keys, calls
+and campaigns live in SQLite at `data/voice-studio.db`. The live monitor subscribes
+over SSE to real sessions.
+
+Clients (web apps, the embeddable widget, Mac apps) open a session with an API key:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/sessions \
+  -H "Authorization: Bearer vs_sk_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{"agentId":"agt_…","channel":"web"}'
+```
+
+- Browser script: `/sdk/voice-studio.js` (`VoiceStudio.mount` / `new VoiceStudio`)
+- TypeScript client: `sdk/js/index.ts`
+- Swift Package: `sdk/swift` (`VoiceStudioClient`)
+- Widget preview: `/widget/[agentId]`
+
+Turn audio stays on the device (Web Speech / AVSpeech). The control plane records the
+session and completes the LLM turn at `/api/media/complete`.
+
+### Bring your own model keys
+
+A tenant stores its own provider keys under **Keys**. They are encrypted with
+`CREDENTIAL_SECRET`, never hashed, because every turn has to present them again. Every
+provider in the catalogue speaks the OpenAI chat-completions shape, which covers hosted
+vendors, Hugging Face, and any self-hosted checkpoint behind vLLM, Ollama, TGI or LM
+Studio under the `custom` provider with your own base URL. Model ids are free text, so
+an arbitrary open-weight repo works without a code change.
+
+One model is chosen at four levels, and the first one set wins:
+
+| Level | Set it with | Lives for |
+| --- | --- | --- |
+| request | `model` on `POST /api/media/complete` | one turn |
+| session | `model` on `POST /api/v1/sessions`, or `PATCH /api/v1/sessions/{id}` | the rest of the call |
+| agent | the builder, or `PATCH /api/v1/agents/{id}` | every session opened after it |
+| platform | `XAI_API_KEY` on the control plane | tenants that brought no key |
+
+```bash
+# what this tenant can switch to
+curl http://localhost:3000/api/v1/models -H "Authorization: Bearer vs_sk_live_…"
+
+# open a session on a specific model, then switch mid-call
+curl -X POST http://localhost:3000/api/v1/sessions \
+  -H "Authorization: Bearer vs_sk_live_…" -H "Content-Type: application/json" \
+  -d '{"agentId":"agt_…","channel":"api","model":"groq/llama-3.1-8b-instant"}'
+
+curl -X PATCH http://localhost:3000/api/v1/sessions/call_… \
+  -H "Authorization: Bearer vs_sk_live_…" -H "Content-Type: application/json" \
+  -d '{"model":"huggingface/Qwen/Qwen2.5-7B-Instruct"}'
+```
+
+Choosing a model spends the tenant's provider key, so it is a secret-key capability. A
+publishable key and a `vst_` session token can speak turns but cannot pick the model,
+and the widget always runs whatever the agent is set to. Without any key at all,
+sessions still connect and return a fallback reply.
+
+Reserved nav slots without screens yet — Voices, Knowledge & tools, Numbers & SIP,
+Evals, Compliance — stay inert. **Keys** is a real page.
 
 ## Stack
 
@@ -102,7 +164,6 @@ Design tokens — the two palettes, paper and ops — are defined once in
 
 ## Scope
 
-This is the interface. There is no telephony, no model inference, and no carrier
-integration behind it: every number is fixture or generated data. The India
-regulatory content rendered in the compliance gate is reproduced from the source
-brief and is engineering guidance, not legal advice.
+Telephony and a licensed Indian carrier are still unbuilt — PSTN numbers will not
+dial. The India regulatory content in the campaign gate is engineering guidance, not
+legal advice.

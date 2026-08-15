@@ -59,13 +59,22 @@ export function Chip({
   className = '',
 }: {
   children: ReactNode
-  tone?: 'fill' | 'outline' | 'accent' | 'ops-fill' | 'ops-outline' | 'ops-alert' | 'ops-good'
+  tone?:
+    | 'fill'
+    | 'outline'
+    | 'accent'
+    | 'good'
+    | 'ops-fill'
+    | 'ops-outline'
+    | 'ops-alert'
+    | 'ops-good'
   className?: string
 }) {
   const styles: Record<string, string> = {
     fill: 'bg-line-5 text-ink-3',
     outline: 'border border-line text-muted-3',
     accent: 'border border-accent-line bg-accent-tint text-accent-deep',
+    good: 'border border-good-line bg-good-tint text-good-deep',
     'ops-fill': 'bg-ops-raised text-ops-ink-3',
     'ops-outline': 'border border-ops-line text-ops-muted-2',
     'ops-alert': 'bg-accent font-semibold text-ops-bg',
@@ -131,5 +140,162 @@ export function Card({
     >
       {children}
     </div>
+  )
+}
+
+const CONTROL =
+  'rounded-[7px] border border-line bg-panel px-[9px] py-[7px] font-sans text-[12.5px] text-ink outline-none focus:border-accent'
+
+/** The mono all-caps label the form controls below share. */
+function ControlLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="font-mono text-[9.5px] font-semibold tracking-[0.07em] text-muted-4">
+      {children}
+    </span>
+  )
+}
+
+/** Labelled select. Every one of the five build surfaces needs one. */
+export function Select({
+  label,
+  name,
+  options,
+  defaultValue,
+  className = '',
+}: {
+  label: string
+  name: string
+  options: { value: string; label: string }[]
+  defaultValue?: string
+  className?: string
+}) {
+  return (
+    <label className={`flex flex-col gap-[6px] ${className}`}>
+      <ControlLabel>{label.toUpperCase()}</ControlLabel>
+      <select name={name} defaultValue={defaultValue} className={CONTROL}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+/** Labelled single-line input, unlike Field it is optional and compact. */
+export function Input({
+  label,
+  name,
+  defaultValue,
+  placeholder,
+  type = 'text',
+  step,
+  className = '',
+}: {
+  label: string
+  name: string
+  defaultValue?: string | number
+  placeholder?: string
+  type?: string
+  step?: string
+  className?: string
+}) {
+  return (
+    <label className={`flex flex-col gap-[6px] ${className}`}>
+      <ControlLabel>{label.toUpperCase()}</ControlLabel>
+      <input
+        name={name}
+        type={type}
+        step={step}
+        defaultValue={defaultValue}
+        placeholder={placeholder}
+        className={CONTROL}
+      />
+    </label>
+  )
+}
+
+/** Labelled multi-line input for prompt and grounding text. */
+export function TextArea({
+  label,
+  name,
+  defaultValue,
+  placeholder,
+  rows = 4,
+  className = '',
+}: {
+  label: string
+  name: string
+  defaultValue?: string
+  placeholder?: string
+  rows?: number
+  className?: string
+}) {
+  return (
+    <label className={`flex flex-col gap-[6px] ${className}`}>
+      <ControlLabel>{label.toUpperCase()}</ControlLabel>
+      <textarea
+        name={name}
+        rows={rows}
+        defaultValue={defaultValue}
+        placeholder={placeholder}
+        className={`${CONTROL} resize-y font-mono text-[11.5px] leading-[1.5]`}
+      />
+    </label>
+  )
+}
+
+/** Inline checkbox, used for scope and policy flags. */
+export function Check({
+  label,
+  name,
+  defaultChecked,
+}: {
+  label: string
+  name: string
+  defaultChecked?: boolean
+}) {
+  return (
+    <label className="flex items-center gap-[7px] font-sans text-[12px] text-ink-2">
+      <input
+        name={name}
+        type="checkbox"
+        defaultChecked={defaultChecked}
+        className="h-[13px] w-[13px] accent-accent"
+      />
+      {label}
+    </label>
+  )
+}
+
+/** Labelled text input. Lived in the old login form until Clerk replaced it. */
+export function Field({
+  label,
+  name,
+  type = 'text',
+  autoComplete,
+  defaultValue,
+}: {
+  label: string
+  name: string
+  type?: string
+  autoComplete?: string
+  defaultValue?: string
+}) {
+  return (
+    <label className="flex flex-col gap-[7px]">
+      <span className="font-mono text-[10px] font-semibold tracking-[0.07em] text-muted-4">
+        {label.toUpperCase()}
+      </span>
+      <input
+        name={name}
+        type={type}
+        required
+        autoComplete={autoComplete}
+        defaultValue={defaultValue}
+        className="rounded-[7px] border border-line bg-panel px-3 py-[10px] font-sans text-[13px] text-ink outline-none focus:border-accent"
+      />
+    </label>
   )
 }

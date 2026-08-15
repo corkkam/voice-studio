@@ -1,54 +1,50 @@
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { CrumbBar } from '@/components/shell/TopBar'
-import { Button, Chip, Eyebrow } from '@/components/ui/primitives'
+import { Chip, Eyebrow } from '@/components/ui/primitives'
 import { TestCallPanel } from '@/components/builder/TestCallPanel'
-import { getAgent } from '@/lib/data/agents'
-import {
-  BUDGET,
-  PIPELINE,
-  SYSTEM_PROMPT_TOKENS,
-  TOOLS,
-  TURN_TAKING,
-} from '@/lib/data/builder'
+import { ConnectPanel } from '@/components/builder/ConnectPanel'
+import { PublishButton, SavePromptForm } from '@/components/builder/AgentEditor'
+import { requireAuth } from '@/lib/auth/session'
+import { getAgentRow } from '@/lib/store/agents'
+import { parsePipeline } from '@/lib/store/types'
+import { TURN_TAKING } from '@/lib/data/defaults'
+import { BUDGET, TOOLS } from '@/lib/data/builder'
 
 export default async function AgentBuilderPage({
   params,
 }: {
   params: Promise<{ agentId: string }>
 }) {
+  const auth = await requireAuth()
   const { agentId } = await params
-  const agent = getAgent(agentId)
+  const agent = getAgentRow(auth.tenant.id, agentId)
   if (!agent) notFound()
 
-  const totalMs = PIPELINE.reduce((sum, s) => sum + s.latencyMs, 0)
+  const pipeline = parsePipeline(agent.pipeline_json)
+  const totalMs = pipeline.reduce((sum, s) => sum + s.latencyMs, 0) || 1
+  const host = await requestBase()
 
   return (
     <>
       <CrumbBar
         crumbs={[{ label: 'Agents', href: '/agents' }, { label: agent.name }]}
-        badge={<Chip tone="outline">v14 · draft</Chip>}
+        badge={
+          <Chip tone="outline">
+            v{agent.version} · {agent.status}
+          </Chip>
+        }
       >
-        <Button variant="ghost" className="px-[12px] py-[7px] text-[11.5px]">
-          Run eval suite
-        </Button>
-        <Button variant="ghost" className="px-[12px] py-[7px] text-[11.5px]">
-          Diff vs live
-        </Button>
-        <Button variant="primary" className="px-[13px] py-[7px] text-[11.5px]">
-          Publish
-        </Button>
+        <PublishButton agentId={agent.id} live={agent.status === 'live'} />
       </CrumbBar>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* Pipeline router — the core IP, so it gets the top of the page. */}
         <section className="flex-none border-b border-line bg-panel px-6 pt-5 pb-4">
           <div className="mb-[13px] flex items-baseline justify-between">
             <div className="flex items-baseline gap-[10px]">
-              <span className="font-sans text-[13.5px] leading-none font-semibold text-ink">
-                Pipeline
-              </span>
+              <span className="font-sans text-[13.5px] leading-none font-semibold text-ink">Pipeline</span>
               <span className="font-sans text-[11.5px] leading-none text-muted-2">
-                Cascaded — transcripts retained for DPDP audit. Each stage swappable per tenant.
+                Cascaded — client STT/TTS, turn complete on the media route. Numbers are budgets.
               </span>
             </div>
             <div className="flex items-center gap-[6px] font-sans text-[11px] leading-none font-medium text-ink-3">
@@ -56,14 +52,11 @@ export default async function AgentBuilderPage({
               <span className="rounded-[5px] border border-accent bg-accent-tint px-2 py-1 font-semibold text-accent-deep">
                 Cascaded
               </span>
-              <span className="rounded-[5px] border border-line px-2 py-1 text-muted-3">
-                Native S2S
-              </span>
             </div>
           </div>
 
           <div className="flex items-stretch">
-            {PIPELINE.map((stage, i) => (
+            {pipeline.map((stage, i) => (
               <div key={stage.key} className="contents">
                 {i > 0 ? (
                   <div className="flex w-[26px] items-center justify-center font-mono text-[13px] leading-none font-medium text-faint-2">
@@ -96,9 +89,7 @@ export default async function AgentBuilderPage({
                   <div className="mt-[9px] font-sans text-[13px] leading-[1.2] font-semibold text-ink">
                     {stage.model}
                   </div>
-                  <div className="mt-[3px] font-sans text-[11px] leading-[1.3] text-muted-2">
-                    {stage.detail}
-                  </div>
+                  <div className="mt-[3px] font-sans text-[11px] leading-[1.3] text-muted-2">{stage.detail}</div>
                   <div
                     className={`mt-[11px] flex items-baseline justify-between border-t pt-[9px] ${
                       stage.active ? 'border-[#f3e7e1]' : 'border-line-3'
@@ -110,42 +101,31 @@ export default async function AgentBuilderPage({
                         <span className="font-normal text-muted-3"> {stage.latencyQualifier}</span>
                       ) : null}
                     </span>
-                    <span className="font-mono text-[10.5px] leading-none text-muted-3">
-                      {stage.cost}
-                    </span>
+                    <span className="font-mono text-[10.5px] leading-none text-muted-3">{stage.cost}</span>
                   </div>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Latency budget — the same five stages, as a share of 800 ms. */}
           <div className="mt-4 rounded-[9px] border border-line bg-panel-2 px-[14px] py-3">
             <div className="mb-[9px] flex items-baseline justify-between">
               <Eyebrow>VOICE-TO-VOICE BUDGET</Eyebrow>
               <span className="font-sans text-[11.5px] leading-none font-medium text-ink-3">
-                <span className="font-mono text-[13px] font-semibold text-ink">
-                  {BUDGET.p50} ms
-                </span>{' '}
-                measured P50 · {BUDGET.p95} ms P95 · {BUDGET.target} ms target
+                {BUDGET.target} ms target · measured P50/P95 appear after live turns
               </span>
             </div>
-
             <div className="flex h-3 overflow-hidden rounded-[3px] bg-[#efe9e1]">
-              {PIPELINE.map((stage) => (
+              {pipeline.map((stage) => (
                 <div
                   key={stage.key}
-                  style={{
-                    width: `${(stage.latencyMs / totalMs) * 100}%`,
-                    background: stage.budgetColor,
-                  }}
-                  title={`${stage.model} — ${stage.latencyMs} ms`}
+                  style={{ width: `${(stage.latencyMs / totalMs) * 100}%`, background: stage.budgetColor }}
+                  title={`${stage.model} — ${stage.latencyMs} ms budget`}
                 />
               ))}
             </div>
-
             <div className="mt-[9px] flex gap-[18px] font-mono text-[10.5px] leading-none font-medium text-muted">
-              {PIPELINE.map((stage) => (
+              {pipeline.map((stage) => (
                 <span key={stage.key}>
                   <span
                     className="mr-[5px] inline-block h-[7px] w-[7px] rounded-[2px] align-middle"
@@ -159,32 +139,22 @@ export default async function AgentBuilderPage({
           </div>
         </section>
 
-        {/* Prompt + behaviour, with the test rail pinned right. */}
         <div className="grid min-h-0 flex-1 grid-cols-[1fr_344px]">
           <div className="flex flex-col gap-[14px] overflow-y-auto px-6 py-5">
-            <div className="overflow-hidden rounded-[9px] border border-line bg-panel">
-              <div className="flex items-center justify-between border-b border-line-3 px-[14px] py-[11px]">
-                <span className="font-sans text-[12px] leading-none font-semibold text-ink">
-                  System prompt
-                </span>
-                <span className="font-mono text-[10px] leading-none font-medium text-muted-3">
-                  {SYSTEM_PROMPT_TOKENS}
-                </span>
-              </div>
-              <div className="px-[14px] py-[13px] font-mono text-[12px] leading-[1.65] text-ink-2">
-                You are Meera, a collections assistant for Acme Finance NBFC.
-                <br />
-                <span className="text-muted-3">
-                  {'// Open every call with the AI + recording disclosure in the customer’s language.'}
-                </span>
-                <br />
-                Speak Hinglish naturally. Never threaten. If the customer disputes the amount, hand
-                off to a human via <span className="text-accent-deep">transfer_to_agent</span>.
-                <br />
-                Confirm any promise-to-pay date by repeating it back, then call{' '}
-                <span className="text-accent-deep">log_ptp(date, amount)</span>.
-              </div>
-            </div>
+            <SavePromptForm
+              agentId={agent.id}
+              name={agent.name}
+              locale={agent.locale}
+              summary={agent.summary}
+              prompt={agent.system_prompt}
+            />
+
+            <ConnectPanel
+              agentId={agent.id}
+              agentName={agent.name}
+              baseUrl={host}
+              published={agent.status === 'live'}
+            />
 
             <div className="grid grid-cols-2 gap-[14px]">
               <div className="rounded-[9px] border border-line bg-panel px-[14px] py-[13px]">
@@ -198,9 +168,7 @@ export default async function AgentBuilderPage({
                       i < TURN_TAKING.length - 1 ? 'border-b border-line-5' : ''
                     }`}
                   >
-                    <span className="font-sans text-[11.5px] leading-none text-ink-3">
-                      {row.label}
-                    </span>
+                    <span className="font-sans text-[11.5px] leading-none text-ink-3">{row.label}</span>
                     <span
                       className={`font-mono text-[11px] leading-none font-medium ${
                         row.tone === 'good' ? 'text-good' : 'text-ink'
@@ -213,14 +181,7 @@ export default async function AgentBuilderPage({
               </div>
 
               <div className="rounded-[9px] border border-line bg-panel px-[14px] py-[13px]">
-                <div className="mb-[11px] flex items-center justify-between">
-                  <span className="font-sans text-[12px] leading-none font-semibold text-ink">
-                    Tools
-                  </span>
-                  <span className="font-mono text-[10px] leading-none font-medium text-accent-deep">
-                    + add
-                  </span>
-                </div>
+                <div className="mb-[11px] font-sans text-[12px] leading-none font-semibold text-ink">Tools</div>
                 <div className="flex flex-col gap-[6px]">
                   {TOOLS.map((tool) => (
                     <div
@@ -230,9 +191,7 @@ export default async function AgentBuilderPage({
                       <span className="font-mono text-[11px] leading-none font-medium text-ink-2">
                         {tool.name}
                       </span>
-                      <span className="font-mono text-[10px] leading-none text-muted-3">
-                        {tool.note}
-                      </span>
+                      <span className="font-mono text-[10px] leading-none text-muted-3">{tool.note}</span>
                     </div>
                   ))}
                 </div>
@@ -241,10 +200,17 @@ export default async function AgentBuilderPage({
           </div>
 
           <aside className="flex flex-col gap-[14px] overflow-y-auto border-l border-line bg-panel p-5">
-            <TestCallPanel />
+            <TestCallPanel agentId={agent.id} />
           </aside>
         </div>
       </div>
     </>
   )
+}
+
+async function requestBase(): Promise<string> {
+  const h = await headers()
+  const host = h.get('x-forwarded-host') || h.get('host') || 'localhost:3000'
+  const proto = h.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https')
+  return `${proto}://${host}`
 }

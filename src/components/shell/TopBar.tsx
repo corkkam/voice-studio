@@ -1,17 +1,22 @@
+'use client'
+
 import Link from 'next/link'
-import { WORKSPACE } from '@/lib/data/agents'
+import { UserMenu } from '@/components/shell/UserMenu'
+import { useWorkspace } from '@/lib/runtime'
 
 /** Workspace + region switcher, ⌘K, and the signed-in operator. */
 export function TopBar() {
+  const workspace = useWorkspace()
+
   return (
     <header className="flex h-[54px] flex-none items-center gap-[14px] border-b border-line bg-panel px-[22px]">
       <div className="flex items-center gap-2 rounded-[6px] border border-line-2 bg-[#f8f6f3] px-[10px] py-[6px]">
         <div className="h-[14px] w-[14px] rounded-[3px] bg-ink" />
         <span className="font-sans text-[12px] leading-none font-semibold text-ink">
-          {WORKSPACE.tenant}
+          {workspace.tenant}
         </span>
         <span className="font-mono text-[10.5px] leading-none font-medium text-muted-3">
-          {WORKSPACE.region}
+          {workspace.region}
         </span>
       </div>
 
@@ -20,14 +25,7 @@ export function TopBar() {
         <span className="font-mono text-[10.5px] font-medium">⌘K</span>
       </div>
 
-      <div className="ml-auto flex items-center gap-[10px]">
-        <div className="font-sans text-[11.5px] leading-none font-medium text-muted">
-          {WORKSPACE.date}
-        </div>
-        <div className="h-[26px] w-[26px] rounded-full border border-faint-3 bg-[#dcd4c9] text-center font-sans text-[10.5px] leading-[26px] font-semibold text-[#6b645d]">
-          {WORKSPACE.initials}
-        </div>
-      </div>
+      <UserMenu />
     </header>
   )
 }

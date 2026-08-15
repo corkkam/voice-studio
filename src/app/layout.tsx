@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { ClerkProvider } from '@clerk/nextjs'
 import { Instrument_Sans, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 
@@ -25,7 +26,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${instrumentSans.variable} ${jetbrainsMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <ClerkProvider afterSignOutUrl="/login">{children}</ClerkProvider>
+      </body>
     </html>
   )
 }
