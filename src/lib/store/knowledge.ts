@@ -2,7 +2,7 @@ import 'server-only'
 
 import { getDb, now, row, rows } from '@/lib/db'
 import { id } from '@/lib/db/ids'
-import type { KnowledgeSnippetRow, ToolRow } from '@/lib/store/types'
+import type { KnowledgeSnippetRow, ToolKind, ToolRow } from '@/lib/store/types'
 
 /*
  * The whole history goes to the model on every turn, so grounding text is not
@@ -118,18 +118,60 @@ function setSnippetScope(tenantId: string, snippetId: string, agentIds: string[]
   }
 }
 
-export function listTools(tenantId: string): ToolRow[] {
+export interface ToolWithScope extends ToolRow {
+  agentIds: string[]
+}
+
+export function listTools(tenantId: string): ToolWithScope[] {
+  const db = getDb()
+  const tools = rows<ToolRow>(
+    db.prepare('SELECT * FROM agent_tools WHERE tenant_id = ? ORDER BY created_at ASC').all(tenantId),
+  )
+  const scopes = db
+    .prepare(
+      `SELECT s.tool_id, s.agent_id FROM tool_scopes s
+       JOIN agent_tools t ON t.id = s.tool_id
+       WHERE t.tenant_id = ?`,
+    )
+    .all(tenantId) as { tool_id: string; agent_id: string }[]
+  return tools.map((tool) => ({
+    ...tool,
+    agentIds: scopes.filter((s) => s.tool_id === tool.id).map((s) => s.agent_id),
+  }))
+}
+
+/**
+ * The tools one agent may call: the tenant-wide ones plus the ones scoped to it.
+ * The runtime sends exactly this, so a tool narrowed to one agent cannot reach
+ * another agent's turn.
+ */
+export function listToolsForAgent(tenantId: string, agentId: string): ToolRow[] {
   return rows<ToolRow>(
     getDb()
-      .prepare('SELECT * FROM agent_tools WHERE tenant_id = ? ORDER BY created_at ASC')
-      .all(tenantId),
+      .prepare(
+        `SELECT t.* FROM agent_tools t
+         WHERE t.tenant_id = ?
+           AND (t.scope_all = 1 OR EXISTS (
+             SELECT 1 FROM tool_scopes s WHERE s.tool_id = t.id AND s.agent_id = ?
+           ))
+         ORDER BY t.created_at ASC`,
+      )
+      .all(tenantId, agentId),
   )
 }
 
-export function createTool(
-  tenantId: string,
-  input: { name: string; description: string; params?: string },
-): ToolRow {
+export interface ToolInput {
+  name: string
+  description: string
+  params?: string
+  kind?: ToolKind
+  connectorId?: string | null
+  remoteName?: string
+  scopeAll?: boolean
+  agentIds?: string[]
+}
+
+export function createTool(tenantId: string, input: ToolInput): ToolRow {
   const created = now()
   const tool: ToolRow = {
     id: id('tol'),
@@ -137,13 +179,19 @@ export function createTool(
     name: input.name.trim(),
     description: input.description.trim(),
     params_json: normaliseParams(input.params),
+    kind: input.kind ?? 'client',
+    connector_id: input.connectorId ?? null,
+    remote_name: input.remoteName?.trim() ?? '',
+    scope_all: input.scopeAll ? 1 : 0,
     created_at: created,
     updated_at: created,
   }
   getDb()
     .prepare(
-      `INSERT INTO agent_tools (id, tenant_id, name, description, params_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agent_tools (
+        id, tenant_id, name, description, params_json, kind, connector_id, remote_name,
+        scope_all, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       tool.id,
@@ -151,14 +199,93 @@ export function createTool(
       tool.name,
       tool.description,
       tool.params_json,
+      tool.kind,
+      tool.connector_id,
+      tool.remote_name,
+      tool.scope_all,
       tool.created_at,
       tool.updated_at,
     )
+  setToolScope(tenantId, tool.id, input.agentIds ?? [])
   return tool
+}
+
+export function updateTool(
+  tenantId: string,
+  toolId: string,
+  input: { description?: string; params?: string; scopeAll?: boolean; agentIds?: string[] },
+): void {
+  const existing = row<ToolRow>(
+    getDb().prepare('SELECT * FROM agent_tools WHERE id = ? AND tenant_id = ?').get(toolId, tenantId),
+  )
+  if (!existing) return
+  getDb()
+    .prepare(
+      `UPDATE agent_tools SET description = ?, params_json = ?, scope_all = ?, updated_at = ?
+       WHERE id = ? AND tenant_id = ?`,
+    )
+    .run(
+      input.description?.trim() ?? existing.description,
+      input.params === undefined ? existing.params_json : normaliseParams(input.params),
+      input.scopeAll === undefined ? existing.scope_all : input.scopeAll ? 1 : 0,
+      now(),
+      toolId,
+      tenantId,
+    )
+  if (input.agentIds) setToolScope(tenantId, toolId, input.agentIds)
 }
 
 export function deleteTool(tenantId: string, toolId: string): void {
   getDb().prepare('DELETE FROM agent_tools WHERE id = ? AND tenant_id = ?').run(toolId, tenantId)
+}
+
+function setToolScope(tenantId: string, toolId: string, agentIds: string[]): void {
+  const db = getDb()
+  db.prepare('DELETE FROM tool_scopes WHERE tool_id = ?').run(toolId)
+  const insert = db.prepare('INSERT OR IGNORE INTO tool_scopes (tool_id, agent_id) VALUES (?, ?)')
+  for (const agentId of agentIds) {
+    // An agent id off a form is user input, so ownership is checked rather than
+    // trusted, exactly as knowledge scopes do it.
+    const owned = db.prepare('SELECT 1 FROM agents WHERE id = ? AND tenant_id = ?').get(agentId, tenantId)
+    if (owned) insert.run(toolId, agentId)
+  }
+}
+
+/**
+ * Replaces the imported tool rows for one connector. Scope carries across on the
+ * remote name, so re-syncing does not silently widen a tool the operator had
+ * narrowed. A newly imported tool reaches no agent until someone says so.
+ */
+export function replaceConnectorTools(
+  tenantId: string,
+  connectorId: string,
+  remote: { name: string; description: string; inputSchema: Record<string, unknown> }[],
+): number {
+  const db = getDb()
+  const previous = listTools(tenantId).filter((tool) => tool.connector_id === connectorId)
+  db.prepare('DELETE FROM agent_tools WHERE tenant_id = ? AND connector_id = ?').run(
+    tenantId,
+    connectorId,
+  )
+  for (const tool of remote) {
+    const before = previous.find((old) => old.remote_name === tool.name)
+    createTool(tenantId, {
+      name: toolNameFor(tool.name),
+      description: tool.description,
+      params: JSON.stringify(tool.inputSchema),
+      kind: 'connector',
+      connectorId,
+      remoteName: tool.name,
+      scopeAll: before ? before.scope_all === 1 : false,
+      agentIds: before?.agentIds ?? [],
+    })
+  }
+  return remote.length
+}
+
+/** Providers accept `^[a-zA-Z0-9_-]{1,64}$` for a function name; MCP is looser. */
+function toolNameFor(remoteName: string): string {
+  return remoteName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'tool'
 }
 
 /** Turns where the model asked for a tool. Reads the existing call_turns.tool. */
@@ -187,6 +314,8 @@ function normaliseParams(raw: string | undefined): string {
 export interface ResolvedPrompt {
   system: string
   snippetNames: string[]
+  /** Scoped to this agent, and already in the order the request will send them. */
+  tools: ToolRow[]
   toolNames: string[]
   chars: number
   dropped: string[]
@@ -205,12 +334,11 @@ export function resolveSystemPrompt(
   const snippets = listSnippets(tenantId).filter(
     (snippet) => snippet.scope_all === 1 || snippet.agentIds.includes(agentId),
   )
-  const tools = listTools(tenantId)
-  const toolNames = tools.map((tool) => tool.name)
+  const tools = listToolsForAgent(tenantId, agentId)
 
   const kept: SnippetWithScope[] = []
   const dropped: string[] = []
-  let used = basePrompt.length + (toolNames.length ? toolNames.join(', ').length + 10 : 0)
+  let used = basePrompt.length
   for (const snippet of snippets) {
     const cost = snippet.name.length + snippet.body.length + 16
     if (used + cost > PROMPT_CEILING) {
@@ -221,17 +349,16 @@ export function resolveSystemPrompt(
     kept.push(snippet)
   }
 
+  // Tools are declared in the request body, not described in the prompt. Listing
+  // them here as well would spend the ceiling twice and teach the model to name a
+  // tool in prose instead of calling it.
   const blocks = kept.map((snippet) => `[knowledge: ${snippet.name}]\n${snippet.body}`)
-  if (toolNames.length) {
-    blocks.push(
-      `[tools] You may request one of these: ${toolNames.join(', ')}. Ask for a tool by name only when it is needed.`,
-    )
-  }
   const system = [...blocks, basePrompt].join('\n\n')
   return {
     system,
     snippetNames: kept.map((snippet) => snippet.name),
-    toolNames,
+    tools,
+    toolNames: tools.map((tool) => tool.name),
     chars: system.length,
     dropped,
   }

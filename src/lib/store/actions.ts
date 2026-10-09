@@ -1,13 +1,28 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { requireAuth } from '@/lib/auth/session'
 import { createAgent, getAgentRow, setAgentVoice, updateAgent } from '@/lib/store/agents'
 import { createCampaign } from '@/lib/store/campaigns'
 import { createKey, revokeKey } from '@/lib/store/keys'
 import { createVoice, deleteVoice, setDefaultVoice, updateVoice } from '@/lib/store/voices'
-import { createSnippet, createTool, deleteSnippet, deleteTool, updateSnippet } from '@/lib/store/knowledge'
+import {
+  createSnippet,
+  createTool,
+  deleteSnippet,
+  deleteTool,
+  updateSnippet,
+  updateTool,
+} from '@/lib/store/knowledge'
+import {
+  createConnector,
+  deleteConnector,
+  revokeConnector,
+} from '@/lib/store/connectors'
+import { beginConnectorAuth, syncConnectorTools } from '@/lib/connectors/service'
+import { ConnectorAuthError } from '@/lib/connectors/oauth'
 import { createNumberIntent, deleteNumberIntent } from '@/lib/store/numbers'
 import { createCase, deleteCase, runSuite } from '@/lib/store/evals'
 import { purgeExpiredCalls, savePolicy } from '@/lib/store/policies'
@@ -245,10 +260,42 @@ export async function createToolAction(_prev: FormState, form: FormData): Promis
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(name)) {
     return { error: 'Use a lower-case function name, letters, digits and underscore.' }
   }
+  const description = String(form.get('description') ?? '').trim()
+  if (!description) {
+    // The description is how the model decides to call it at all, so an empty one
+    // is a tool that never fires.
+    return { error: 'Say when the model should call this tool.' }
+  }
+  const agentIds = form.getAll('agentIds').map(String).filter(Boolean)
+  const scopeAll = String(form.get('scopeAll') ?? '') === 'on'
+  if (!scopeAll && agentIds.length === 0) {
+    return { error: 'Choose the agents, or make it available to every agent.' }
+  }
   createTool(auth.tenant.id, {
     name,
-    description: String(form.get('description') ?? ''),
+    description,
     params: String(form.get('params') ?? ''),
+    kind: 'client',
+    scopeAll,
+    agentIds,
+  })
+  revalidatePath('/knowledge')
+  return undefined
+}
+
+export async function updateToolAction(_prev: FormState, form: FormData): Promise<FormState> {
+  const auth = await requireAuth()
+  const toolId = String(form.get('toolId') ?? '')
+  const agentIds = form.getAll('agentIds').map(String).filter(Boolean)
+  const scopeAll = String(form.get('scopeAll') ?? '') === 'on'
+  if (!scopeAll && agentIds.length === 0) {
+    return { error: 'Choose the agents, or make it available to every agent.' }
+  }
+  updateTool(auth.tenant.id, toolId, {
+    description: String(form.get('description') ?? ''),
+    params: form.get('params') === null ? undefined : String(form.get('params')),
+    scopeAll,
+    agentIds,
   })
   revalidatePath('/knowledge')
   return undefined
@@ -257,6 +304,81 @@ export async function createToolAction(_prev: FormState, form: FormData): Promis
 export async function deleteToolAction(toolId: string): Promise<void> {
   const auth = await requireAuth()
   deleteTool(auth.tenant.id, toolId)
+  revalidatePath('/knowledge')
+}
+
+/* Connectors */
+
+export async function createConnectorAction(_prev: FormState, form: FormData): Promise<FormState> {
+  const auth = await requireAuth()
+  if (!hasCredentialSecret()) {
+    return { error: 'Credential storage is not configured on this control plane.' }
+  }
+  const authKind = String(form.get('authKind') ?? 'oauth')
+  if (authKind !== 'oauth' && authKind !== 'bearer' && authKind !== 'none') {
+    return { error: 'Choose how the server authenticates.' }
+  }
+  try {
+    createConnector(auth.tenant.id, {
+      name: String(form.get('name') ?? ''),
+      serverUrl: String(form.get('serverUrl') ?? ''),
+      authKind,
+      bearerToken: String(form.get('bearerToken') ?? ''),
+    })
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'That connector could not be added.' }
+  }
+  revalidatePath('/connectors')
+  return { saved: true }
+}
+
+/**
+ * Sends the operator to the authorization server. The redirect leaves this action,
+ * so it returns nothing on success; `redirect` throws by design.
+ */
+export async function connectConnectorAction(connectorId: string): Promise<FormState> {
+  const auth = await requireAuth()
+  const head = await headers()
+  const host = head.get('x-forwarded-host') || head.get('host') || 'localhost:3000'
+  const proto = head.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https')
+
+  let target: string
+  try {
+    target = await beginConnectorAuth(auth.tenant.id, connectorId, `${proto}://${host}`)
+  } catch (error) {
+    const message =
+      error instanceof ConnectorAuthError ? error.message : 'That server could not be reached.'
+    return { error: message }
+  }
+  redirect(target)
+}
+
+export async function syncConnectorAction(connectorId: string): Promise<FormState> {
+  const auth = await requireAuth()
+  try {
+    const count = await syncConnectorTools(auth.tenant.id, connectorId)
+    revalidatePath('/connectors')
+    revalidatePath('/knowledge')
+    return { note: `${count} tools imported. Scope them before an agent can use them.` }
+  } catch (error) {
+    revalidatePath('/connectors')
+    return { error: error instanceof Error ? error.message : 'That connector did not answer.' }
+  }
+}
+
+export async function revokeConnectorAction(connectorId: string): Promise<void> {
+  const auth = await requireAuth()
+  revokeConnector(auth.tenant.id, connectorId)
+  revalidatePath('/connectors')
+  revalidatePath('/knowledge')
+}
+
+export async function deleteConnectorAction(connectorId: string): Promise<void> {
+  const auth = await requireAuth()
+  // The tool rows go with it through ON DELETE CASCADE, which is what an operator
+  // means by removing a connector.
+  deleteConnector(auth.tenant.id, connectorId)
+  revalidatePath('/connectors')
   revalidatePath('/knowledge')
 }
 

@@ -82,6 +82,8 @@ export interface CallRow {
   model_provider: string | null
   model_name: string | null
   model_credential_id: string | null
+  /** Set while a turn waits on a tool the caller's own app has to run. */
+  pending_tools_json: string | null
 }
 
 export interface TurnRow {
@@ -158,14 +160,71 @@ export interface KnowledgeSnippetRow {
   updated_at: number
 }
 
+/**
+ * `client` is executed by the caller's own app, which is why it carries no secret
+ * here. `connector` is executed by us against a remote MCP server, with the token
+ * that `src/lib/store/connectors.ts` holds.
+ */
+export type ToolKind = 'client' | 'connector'
+
 export interface ToolRow {
   id: string
   tenant_id: string
   name: string
   description: string
   params_json: string
+  kind: ToolKind
+  /** Set only for `connector`. Names the row in `connectors`. */
+  connector_id: string | null
+  /** The tool name on the remote server, which need not match `name`. */
+  remote_name: string
+  /** 1 means every agent in the tenant. 0 means the rows in `tool_scopes`. */
+  scope_all: number
   created_at: number
   updated_at: number
+}
+
+export type ConnectorAuthKind = 'none' | 'bearer' | 'oauth'
+export type ConnectorStatus = 'pending' | 'ready' | 'error'
+
+export interface ConnectorRow {
+  id: string
+  tenant_id: string
+  name: string
+  server_url: string
+  auth_kind: ConnectorAuthKind
+  status: ConnectorStatus
+  status_detail: string
+  issuer: string
+  authorize_url: string
+  token_url: string
+  registration_url: string
+  client_id: string
+  client_secret_enc: string | null
+  scope: string
+  access_enc: string | null
+  refresh_enc: string | null
+  expires_at: number | null
+  created_at: number
+  updated_at: number
+  last_sync_at: number | null
+  revoked_at: number | null
+}
+
+/** What leaves the store. No wrapped token ever does. */
+export type Connector = Omit<
+  ConnectorRow,
+  'client_secret_enc' | 'access_enc' | 'refresh_enc'
+> & { connected: boolean }
+
+export interface OAuthStateRow {
+  state: string
+  tenant_id: string
+  connector_id: string
+  verifier: string
+  redirect_uri: string
+  issuer: string
+  expires_at: number
 }
 
 export type NumberIntentKind = 'did_inbound' | 'sip_outbound' | 'sip_inbound'

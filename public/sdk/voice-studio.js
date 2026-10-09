@@ -34,6 +34,7 @@
     this.completeUrl = data.completeUrl;
     this.hangupUrl = data.hangupUrl;
     this._handlers = {};
+    this._tools = {};
     if (this.eventsUrl && typeof EventSource !== "undefined") {
       this._source = new EventSource(this.eventsUrl);
       var self = this;
@@ -60,14 +61,59 @@
     if (name === "event" && payload && payload.turns) this._emit("transcript", payload);
   };
 
-  VoiceSession.prototype.sendText = async function (text) {
+  /* Matches MAX_TOOL_STEPS on the server. */
+  const MAX_TOOL_ROUNDS = 3;
+
+  /*
+   * Registers a tool this page can run. The name has to match the tool in the
+   * studio. The handler holds the page's own data; only what it returns is sent.
+   */
+  VoiceSession.prototype.tool = function (name, handler) {
+    this._tools[name] = handler;
+    return this;
+  };
+
+  VoiceSession.prototype._post = async function (payload) {
+    payload.sessionId = this.id;
+    payload.token = this.token;
     const res = await fetch(this.completeUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: this.id, token: this.token, text: text }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Turn failed");
+    return data;
+  };
+
+  VoiceSession.prototype._runTool = async function (call) {
+    try {
+      const output = await this._tools[call.name](call.arguments || {});
+      return typeof output === "string" ? output : JSON.stringify(output === undefined ? null : output);
+    } catch (error) {
+      /* The model can speak through a failed tool, so this is reported, not thrown. */
+      return "The tool failed: " + (error && error.message ? error.message : "unknown error");
+    }
+  };
+
+  VoiceSession.prototype.sendText = async function (text) {
+    const self = this;
+    let data = await this._post({ text: text });
+
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      const calls = (data.toolCalls || []).filter(function (call) {
+        return typeof self._tools[call.name] === "function";
+      });
+      if (!calls.length) break;
+      this._emit("tool", { calls: calls });
+      const results = await Promise.all(
+        calls.map(async function (call) {
+          return { id: call.id, result: await self._runTool(call) };
+        }),
+      );
+      data = await this._post({ toolResults: results });
+    }
+
     this._emit("reply", data);
     return data;
   };
