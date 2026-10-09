@@ -1,7 +1,7 @@
 import { apiError, bearer, corsHeaders, json, readJson } from '@/lib/api/http'
 import { requireSecretKey } from '@/lib/api/guard'
 import { getAuth } from '@/lib/auth/session'
-import { completeTurn } from '@/lib/media/complete'
+import { completeTurn, continueTurn, type ToolResult } from '@/lib/media/complete'
 import { getCall, resolveSessionToken } from '@/lib/store/calls'
 import { parseModelRef, type ModelRef } from '@/lib/models/catalog'
 import { ModelRouteError } from '@/lib/models/route'
@@ -18,9 +18,12 @@ export async function POST(req: Request) {
     token?: string
     text?: string
     model?: unknown
+    toolResults?: unknown
   }>(req)
+  const toolResults = parseToolResults(body.toolResults)
   const text = body.text?.trim()
-  if (!text) return apiError('text is required', 400, corsHeaders(req))
+  // A turn is either spoken or resumed with tool output, never both.
+  if (!text && !toolResults) return apiError('text is required', 400, corsHeaders(req))
 
   const auth = await getAuth()
   let call = body.token ? resolveSessionToken(body.token)?.call : undefined
@@ -50,7 +53,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await completeTurn(call, text, override)
+    const result = toolResults
+      ? await continueTurn(call, toolResults)
+      : await completeTurn(call, text!, override)
     return json(
       {
         reply: result.text,
@@ -59,6 +64,9 @@ export async function POST(req: Request) {
         provider: result.provider,
         modelSource: result.source,
         fallback: result.fallback,
+        // Present only when the caller's own app has to run something. Post the
+        // results back to this route to finish the same turn.
+        toolCalls: result.toolCalls,
       },
       200,
       corsHeaders(req),
@@ -67,4 +75,16 @@ export async function POST(req: Request) {
     const message = error instanceof Error ? error.message : 'Completion failed'
     return apiError(message, error instanceof ModelRouteError ? 422 : 502, corsHeaders(req))
   }
+}
+
+/** Undefined means "not a resume". An empty array is a resume with nothing to say. */
+function parseToolResults(raw: unknown): ToolResult[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  return raw.flatMap((entry) => {
+    const item = entry as { id?: unknown; result?: unknown }
+    if (typeof item?.id !== 'string' || !item.id) return []
+    const result =
+      typeof item.result === 'string' ? item.result : JSON.stringify(item.result ?? null)
+    return [{ id: item.id, result: result.slice(0, 8000) }]
+  })
 }

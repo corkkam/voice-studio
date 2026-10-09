@@ -38,7 +38,28 @@ public struct VoiceStudioReply: Sendable {
     /// request, session, agent or platform.
     public let modelSource: String
     public let fallback: Bool
+    /// Tools this app has to run. `sendText` runs the registered ones and resolves
+    /// with the final reply, so this is only non-empty when a tool has no handler.
+    public let toolCalls: [VoiceStudioToolCall]
 }
+
+public struct VoiceStudioToolCall: Sendable {
+    public let id: String
+    public let name: String
+    public let arguments: [String: Any]
+
+    public init(id: String, name: String, arguments: [String: Any]) {
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+    }
+}
+
+extension VoiceStudioToolCall: @unchecked Sendable {}
+
+/// Return a string, or anything `JSONSerialization` accepts. It goes back to the
+/// model as the tool result.
+public typealias VoiceStudioToolHandler = @Sendable ([String: Any]) async throws -> Any
 
 public struct VoiceStudioProvider: Sendable {
     public let id: String
@@ -159,6 +180,10 @@ public final class VoiceStudioSession: @unchecked Sendable {
     private let hangupURL: URL
     private let apiKey: String
     private let session: URLSession
+    private var tools: [String: VoiceStudioToolHandler] = [:]
+
+    /// Matches MAX_TOOL_STEPS on the server, so the client cannot out-loop the turn.
+    private static let maxToolRounds = 3
 
     init(
         id: String,
@@ -178,18 +203,56 @@ public final class VoiceStudioSession: @unchecked Sendable {
         self.session = session
     }
 
-    /// `model` runs this one turn elsewhere without changing the session.
+    /// Registers a tool this app can run. The name has to match the tool in the
+    /// studio. The handler holds this app's own credentials and data; only what it
+    /// returns is sent to the control plane.
+    public func tool(_ name: String, _ handler: @escaping VoiceStudioToolHandler) {
+        tools[name] = handler
+    }
+
+    /// `model` runs this one turn elsewhere without changing the session. If the
+    /// model calls a tool registered with `tool(_:_:)`, this runs it and carries on,
+    /// so the result is the spoken answer and not a half-finished turn.
     public func sendText(_ text: String, model: VoiceStudioModel? = nil) async throws -> VoiceStudioReply {
+        var body: [String: Any] = ["text": text]
+        if let model { body["model"] = model.payload }
+        var reply = try await post(body, withKey: model != nil)
+
+        for _ in 0..<Self.maxToolRounds {
+            let runnable = reply.toolCalls.filter { tools[$0.name] != nil }
+            if runnable.isEmpty { break }
+            var results: [[String: Any]] = []
+            for call in runnable {
+                results.append(["id": call.id, "result": await run(call)])
+            }
+            reply = try await post(["toolResults": results], withKey: false)
+        }
+
+        onTranscript?(reply)
+        return reply
+    }
+
+    private func run(_ call: VoiceStudioToolCall) async -> String {
+        guard let handler = tools[call.name] else { return "That tool is not available." }
+        do {
+            let output = try await handler(call.arguments)
+            if let text = output as? String { return text }
+            let data = try JSONSerialization.data(withJSONObject: output)
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            // The model can speak through a failed tool, so this is reported, not thrown.
+            return "The tool failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func post(_ payload: [String: Any], withKey: Bool) async throws -> VoiceStudioReply {
         var request = URLRequest(url: completeURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = [
-            "sessionId": id,
-            "token": token,
-            "text": text,
-        ]
-        if let model {
-            body["model"] = model.payload
+        var body = payload
+        body["sessionId"] = id
+        body["token"] = token
+        if withKey {
             // A session token cannot choose a model; the secret key is what authorises it.
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
@@ -197,16 +260,25 @@ public final class VoiceStudioSession: @unchecked Sendable {
         let (data, response) = try await session.data(for: request)
         try VoiceStudioClient.throwIfNeeded(response, data: data)
         let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let reply = VoiceStudioReply(
+        let rawCalls = parsed?["toolCalls"] as? [[String: Any]] ?? []
+        return VoiceStudioReply(
             text: parsed?["reply"] as? String ?? "",
             llmMs: parsed?["llmMs"] as? Int ?? 0,
             model: parsed?["model"] as? String ?? "",
             provider: parsed?["provider"] as? String ?? "",
             modelSource: parsed?["modelSource"] as? String ?? "",
-            fallback: parsed?["fallback"] as? Bool ?? false
+            fallback: parsed?["fallback"] as? Bool ?? false,
+            toolCalls: rawCalls.compactMap { entry in
+                guard let id = entry["id"] as? String, let name = entry["name"] as? String else {
+                    return nil
+                }
+                return VoiceStudioToolCall(
+                    id: id,
+                    name: name,
+                    arguments: entry["arguments"] as? [String: Any] ?? [:]
+                )
+            }
         )
-        onTranscript?(reply)
-        return reply
     }
 
     /// Switches the model for every later turn of this session. Passing nil follows

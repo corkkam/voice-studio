@@ -111,7 +111,8 @@ function bootstrap(db: DatabaseSync) {
       metadata_json TEXT,
       model_provider TEXT,
       model_name TEXT,
-      model_credential_id TEXT
+      model_credential_id TEXT,
+      pending_tools_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS call_turns (
@@ -181,8 +182,52 @@ function bootstrap(db: DatabaseSync) {
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       params_json TEXT NOT NULL DEFAULT '{}',
+      kind TEXT NOT NULL DEFAULT 'client',
+      connector_id TEXT,
+      remote_name TEXT NOT NULL DEFAULT '',
+      scope_all INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tool_scopes (
+      tool_id TEXT NOT NULL REFERENCES agent_tools(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      PRIMARY KEY (tool_id, agent_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS connectors (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      server_url TEXT NOT NULL,
+      auth_kind TEXT NOT NULL DEFAULT 'oauth',
+      status TEXT NOT NULL DEFAULT 'pending',
+      status_detail TEXT NOT NULL DEFAULT '',
+      issuer TEXT NOT NULL DEFAULT '',
+      authorize_url TEXT NOT NULL DEFAULT '',
+      token_url TEXT NOT NULL DEFAULT '',
+      registration_url TEXT NOT NULL DEFAULT '',
+      client_id TEXT NOT NULL DEFAULT '',
+      client_secret_enc TEXT,
+      scope TEXT NOT NULL DEFAULT '',
+      access_enc TEXT,
+      refresh_enc TEXT,
+      expires_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_sync_at INTEGER,
+      revoked_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_oauth_states (
+      state TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      connector_id TEXT NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+      verifier TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      issuer TEXT NOT NULL DEFAULT '',
+      expires_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS number_intents (
@@ -250,6 +295,7 @@ function bootstrap(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS idx_voices_tenant ON voices(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_snippets_tenant ON knowledge_snippets(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_tools_tenant ON agent_tools(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_connectors_tenant ON connectors(tenant_id, revoked_at);
     CREATE INDEX IF NOT EXISTS idx_intents_tenant ON number_intents(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_eval_cases_agent ON eval_cases(tenant_id, agent_id);
     CREATE INDEX IF NOT EXISTS idx_eval_runs_agent ON eval_runs(tenant_id, agent_id, started_at);
@@ -259,6 +305,7 @@ function bootstrap(db: DatabaseSync) {
   clerkMigration(db)
   modelRoutingMigration(db)
   surfacesMigration(db)
+  toolScopeMigration(db)
 }
 
 /*
@@ -311,6 +358,20 @@ function modelRoutingMigration(db: DatabaseSync) {
  */
 function surfacesMigration(db: DatabaseSync) {
   addColumn(db, 'agents', 'voice_id', 'TEXT')
+}
+
+/*
+ * A tool used to reach every agent in the tenant because there was no way to say
+ * otherwise. `scope_all` therefore defaults to 1: an existing database converges
+ * to the behaviour it already had, and narrowing a tool is an explicit act.
+ * The new tables need no help here, only the new columns do.
+ */
+function toolScopeMigration(db: DatabaseSync) {
+  addColumn(db, 'agent_tools', 'kind', "TEXT NOT NULL DEFAULT 'client'")
+  addColumn(db, 'agent_tools', 'connector_id', 'TEXT')
+  addColumn(db, 'agent_tools', 'remote_name', "TEXT NOT NULL DEFAULT ''")
+  addColumn(db, 'agent_tools', 'scope_all', 'INTEGER NOT NULL DEFAULT 1')
+  addColumn(db, 'calls', 'pending_tools_json', 'TEXT')
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

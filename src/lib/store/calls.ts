@@ -209,6 +209,16 @@ export function setCallActivity(call: CallRow, activity: CallActivity, detail: s
   publish(call.tenant_id, { type: 'call.upsert', callId: call.id })
 }
 
+/*
+ * Parks the conversation a turn is holding while the caller's app runs a tool.
+ * It is call state, not a turn: the turn is not finished until the result lands.
+ * Null clears it, which every finished turn does.
+ */
+export function setCallPending(call: CallRow, pending: string | null): void {
+  getDb().prepare('UPDATE calls SET pending_tools_json = ? WHERE id = ?').run(pending, call.id)
+  call.pending_tools_json = pending
+}
+
 export function endCall(call: CallRow, outcome = 'Session ended'): CallRow {
   const ended = now()
   getDb()
