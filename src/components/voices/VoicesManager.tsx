@@ -173,7 +173,7 @@ function PresetForm({ voice, onDone }: { voice?: VoiceCard; onDone: () => void }
       className="rounded-[9px] border border-line bg-panel p-[14px_15px]"
     >
       {voice ? <input type="hidden" name="voiceId" value={voice.id} /> : null}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Input label="Name" name="name" defaultValue={voice?.name} placeholder="Support calm" />
         <Select label="Locale" name="locale" options={LOCALES} defaultValue={voice?.locale ?? 'en-IN'} />
         <Select
@@ -182,10 +182,10 @@ function PresetForm({ voice, onDone }: { voice?: VoiceCard; onDone: () => void }
           options={FAMILIES}
           defaultValue={voice?.familyHint ?? 'any'}
         />
-        <div className="grid grid-cols-2 gap-3">
-          <Input label="Rate" name="rate" type="number" step="0.01" defaultValue={voice?.rate ?? 1} />
-          <Input label="Pitch" name="pitch" type="number" step="0.01" defaultValue={voice?.pitch ?? 1} />
-        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <Slider label="Rate" name="rate" defaultValue={voice?.rate ?? 1} suffix="x" />
+        <Slider label="Pitch" name="pitch" defaultValue={voice?.pitch ?? 1} />
       </div>
       <div className="mt-3">
         <TextArea
@@ -206,6 +206,54 @@ function PresetForm({ voice, onDone }: { voice?: VoiceCard; onDone: () => void }
         <Button onClick={onDone}>Cancel</Button>
       </div>
     </form>
+  )
+}
+
+/*
+ * Rate and pitch are the two knobs a preset actually carries, and both clamp to
+ * 0.5-2 in src/lib/store/voices.ts. The slider keeps that range visible instead
+ * of leaving an operator to guess it from a bare number box. Step stays at 0.01
+ * so an existing preset never fails step validation on save.
+ */
+function Slider({
+  label,
+  name,
+  defaultValue,
+  suffix = '',
+}: {
+  label: string
+  name: string
+  defaultValue: number
+  suffix?: string
+}) {
+  const [value, setValue] = useState(defaultValue)
+
+  return (
+    <label className="flex flex-col gap-[6px]">
+      <span className="flex items-baseline justify-between">
+        <span className="font-mono text-[9.5px] font-semibold tracking-[0.07em] text-muted-4">
+          {label.toUpperCase()}
+        </span>
+        <span className="font-mono text-[11.5px] leading-none font-medium text-ink-2">
+          {value.toFixed(2)}
+          {suffix ? <span className="text-muted-3">{suffix}</span> : null}
+        </span>
+      </span>
+      <input
+        name={name}
+        type="range"
+        min={0.5}
+        max={2}
+        step={0.01}
+        value={value}
+        onChange={(event) => setValue(Number(event.target.value))}
+        className="h-[18px] w-full accent-accent"
+      />
+      <span className="flex justify-between font-mono text-[9.5px] leading-none text-muted-3">
+        <span>0.50</span>
+        <span>2.00</span>
+      </span>
+    </label>
   )
 }
 
