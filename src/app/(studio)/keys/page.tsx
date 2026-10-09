@@ -5,7 +5,7 @@ import { listKeys } from '@/lib/store/keys'
 
 export default async function KeysPage() {
   const auth = await requireAuth()
-  const keys = listKeys(auth.tenant.id)
+  const keys = await listKeys(auth.tenant.id)
 
   return (
     <>

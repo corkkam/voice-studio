@@ -17,21 +17,21 @@ export default async function EvalsPage({
 }) {
   const auth = await requireAuth()
   const { agent: requested } = await searchParams
-  const agents = listAgentSummaries(auth.tenant.id).map((agent) => ({
+  const agents = (await listAgentSummaries(auth.tenant.id)).map((agent) => ({
     id: agent.id,
     name: agent.name,
     version: agent.version,
   }))
   const agentId = agents.find((agent) => agent.id === requested)?.id ?? agents[0]?.id ?? null
 
-  const cases = agentId ? listCases(auth.tenant.id, agentId) : []
-  const run = agentId ? latestRun(auth.tenant.id, agentId) : undefined
-  const prior = agentId ? previousRun(auth.tenant.id, agentId) : undefined
-  const results = run ? listResults(run.id) : []
+  const cases = agentId ? await listCases(auth.tenant.id, agentId) : []
+  const run = agentId ? await latestRun(auth.tenant.id, agentId) : undefined
+  const prior = agentId ? await previousRun(auth.tenant.id, agentId) : undefined
+  const results = run ? await listResults(run.id) : []
   // A regression is a case that passed on the previous run and fails on this
   // one. That is the signal worth surfacing, not the raw failure count.
   const priorPassed = new Set(
-    (prior ? listResults(prior.id) : []).filter((r) => r.pass === 1).map((r) => r.case_id),
+    (prior ? await listResults(prior.id) : []).filter((r) => r.pass === 1).map((r) => r.case_id),
   )
 
   return (

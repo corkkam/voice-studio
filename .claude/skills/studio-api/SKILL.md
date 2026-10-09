@@ -24,14 +24,14 @@ freely.
 import { apiError, corsHeaders, json, readJson } from '@/lib/api/http'
 import { requireApiKey } from '@/lib/api/guard'
 
-export const runtime = 'nodejs'                     // node:sqlite needs it
+export const runtime = 'nodejs'                     // never 'edge'; the app needs Node APIs
 
 export function OPTIONS(req: Request) {
   return new Response(null, { status: 204, headers: corsHeaders(req) })
 }
 
 export async function POST(req: Request) {
-  const key = requireApiKey(req)
+  const key = await requireApiKey(req)               // reads the database, so await it
   if (!key) return apiError('Unauthorized', 401)
   const body = await readJson<{ agentId?: string }>(req)
   if (!body.agentId) return apiError('agentId is required')

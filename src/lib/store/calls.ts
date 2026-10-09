@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id, sha256, token } from '@/lib/db/ids'
 import { publish } from '@/lib/realtime/hub'
 import { formatElapsed, type EndedCall, type LiveCall } from '@/lib/data/calls'
@@ -27,9 +27,8 @@ export interface CreatedCall {
 
 const SESSION_MS = 4 * 60 * 60 * 1000
 
-export function createCall(input: CreateCallInput): CreatedCall {
-  const db = getDb()
-  const agent = getAgentById(input.agentId)
+export async function createCall(input: CreateCallInput): Promise<CreatedCall> {
+  const agent = await getAgentById(input.agentId)
   if (!agent || agent.tenant_id !== input.tenantId) {
     throw new Error('Agent not found')
   }
@@ -46,90 +45,90 @@ export function createCall(input: CreateCallInput): CreatedCall {
           ? 'API session'
           : 'Web visitor')
 
-  db.prepare(
+  await run(
     `INSERT INTO calls (
       id, tenant_id, agent_id, channel, display, locale, status, activity,
       activity_detail, started_at, ended_at, v2v_ms, barge_ins, outcome, sentiment, metadata_json,
       model_provider, model_name, model_credential_id
     ) VALUES (?, ?, ?, ?, ?, ?, 'live', 'connecting', ?, ?, NULL, NULL, 0, NULL, 'flat', ?, ?, ?, ?)`,
-  ).run(
+    [
+      callId,
+      input.tenantId,
+      input.agentId,
+      input.channel,
+      display,
+      input.locale || agent.locale,
+      `${input.channel} · connecting`,
+      created,
+      input.metadata ? JSON.stringify(input.metadata) : null,
+      input.model?.provider ?? null,
+      input.model?.model ?? null,
+      input.model?.credentialId ?? null,
+    ],
+  )
+  await run(`INSERT INTO session_tokens (token_hash, call_id, tenant_id, expires_at) VALUES (?, ?, ?, ?)`, [
+    sha256(rawToken),
     callId,
     input.tenantId,
-    input.agentId,
-    input.channel,
-    display,
-    input.locale || agent.locale,
-    `${input.channel} · connecting`,
-    created,
-    input.metadata ? JSON.stringify(input.metadata) : null,
-    input.model?.provider ?? null,
-    input.model?.model ?? null,
-    input.model?.credentialId ?? null,
-  )
-  db.prepare(
-    `INSERT INTO session_tokens (token_hash, call_id, tenant_id, expires_at) VALUES (?, ?, ?, ?)`,
-  ).run(sha256(rawToken), callId, input.tenantId, created + SESSION_MS)
+    created + SESSION_MS,
+  ])
 
   publish(input.tenantId, { type: 'call.upsert', callId })
-  return { call: getCall(input.tenantId, callId)!, sessionToken: rawToken }
+  return { call: (await getCall(input.tenantId, callId))!, sessionToken: rawToken }
 }
 
-export function getCall(tenantId: string, callId: string): CallRow | undefined {
-  return row<CallRow>(
-    getDb().prepare('SELECT * FROM calls WHERE id = ? AND tenant_id = ?').get(callId, tenantId),
+export function getCall(tenantId: string, callId: string): Promise<CallRow | undefined> {
+  return one<CallRow>('SELECT * FROM calls WHERE id = ? AND tenant_id = ?', [callId, tenantId])
+}
+
+export function getCallById(callId: string): Promise<CallRow | undefined> {
+  return one<CallRow>('SELECT * FROM calls WHERE id = ?', [callId])
+}
+
+export async function resolveSessionToken(
+  raw: string,
+): Promise<{ call: CallRow; tenantId: string } | undefined> {
+  const found = await one<{ tenant_id: string; expires_at: number; call_id: string }>(
+    `SELECT t.tenant_id, t.expires_at, t.call_id
+     FROM session_tokens t WHERE t.token_hash = ?`,
+    [sha256(raw)],
   )
-}
-
-export function getCallById(callId: string): CallRow | undefined {
-  return row<CallRow>(getDb().prepare('SELECT * FROM calls WHERE id = ?').get(callId))
-}
-
-export function resolveSessionToken(raw: string): { call: CallRow; tenantId: string } | undefined {
-  const row = getDb()
-    .prepare(
-      `SELECT t.tenant_id, t.expires_at, t.call_id
-       FROM session_tokens t WHERE t.token_hash = ?`,
-    )
-    .get(sha256(raw)) as { tenant_id: string; expires_at: number; call_id: string } | undefined
-  if (!row || row.expires_at < now()) return undefined
-  const call = getCall(row.tenant_id, row.call_id)
+  if (!found || found.expires_at < now()) return undefined
+  const call = await getCall(found.tenant_id, found.call_id)
   if (!call) return undefined
-  return { call, tenantId: row.tenant_id }
+  return { call, tenantId: found.tenant_id }
 }
 
-export function listLiveCalls(tenantId: string): LiveCall[] {
-  return rows<CallRow>(
-    getDb()
-      .prepare(`SELECT * FROM calls WHERE tenant_id = ? AND status = 'live' ORDER BY started_at DESC`)
-      .all(tenantId),
-  ).map((item) => toLiveCall(item))
-}
-
-export function listEndedCalls(tenantId: string, limit = 40): EndedCall[] {
-  return rows<CallRow>(
-    getDb()
-      .prepare(
-        `SELECT * FROM calls WHERE tenant_id = ? AND status = 'ended'
-         ORDER BY ended_at DESC LIMIT ?`,
-      )
-      .all(tenantId, limit),
-  ).map(toEndedCall)
-}
-
-export function countLive(tenantId: string): number {
-  const row = getDb()
-    .prepare(`SELECT COUNT(*) AS n FROM calls WHERE tenant_id = ? AND status = 'live'`)
-    .get(tenantId) as { n: number }
-  return Number(row.n) || 0
-}
-
-export function listTurns(callId: string): TurnRow[] {
-  return rows<TurnRow>(
-    getDb().prepare('SELECT * FROM call_turns WHERE call_id = ? ORDER BY seq ASC').all(callId),
+export async function listLiveCalls(tenantId: string): Promise<LiveCall[]> {
+  const found = await all<CallRow>(
+    `SELECT * FROM calls WHERE tenant_id = ? AND status = 'live' ORDER BY started_at DESC`,
+    [tenantId],
   )
+  return Promise.all(found.map((item) => toLiveCall(item)))
 }
 
-export function appendTurn(
+export async function listEndedCalls(tenantId: string, limit = 40): Promise<EndedCall[]> {
+  const found = await all<CallRow>(
+    `SELECT * FROM calls WHERE tenant_id = ? AND status = 'ended'
+     ORDER BY ended_at DESC LIMIT ?`,
+    [tenantId, limit],
+  )
+  return Promise.all(found.map(toEndedCall))
+}
+
+export async function countLive(tenantId: string): Promise<number> {
+  const found = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM calls WHERE tenant_id = ? AND status = 'live'`,
+    [tenantId],
+  )
+  return Number(found?.n) || 0
+}
+
+export function listTurns(callId: string): Promise<TurnRow[]> {
+  return all<TurnRow>('SELECT * FROM call_turns WHERE call_id = ? ORDER BY seq ASC', [callId])
+}
+
+export async function appendTurn(
   call: CallRow,
   input: {
     speaker: 'AGENT' | 'CALLER'
@@ -141,12 +140,12 @@ export function appendTurn(
     activity?: CallActivity
     activityDetail?: string
   },
-): TurnRow {
-  const db = getDb()
-  const seqRow = db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM call_turns WHERE call_id = ?').get(call.id) as {
-    n: number
-  }
-  const seq = Number(seqRow.n) + 1
+): Promise<TurnRow> {
+  const seqRow = await one<{ n: number }>(
+    'SELECT COALESCE(MAX(seq), 0) AS n FROM call_turns WHERE call_id = ?',
+    [call.id],
+  )
+  const seq = Number(seqRow?.n) + 1
   const turn: TurnRow = {
     id: id('trn'),
     call_id: call.id,
@@ -161,30 +160,34 @@ export function appendTurn(
     tts_ms: null,
     model: input.model ?? null,
   }
-  db.prepare(
+  await run(
     `INSERT INTO call_turns (id, call_id, seq, at_ms, speaker, text, tool, v2v_ms, stt_ms, llm_ms, tts_ms, model)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    turn.id,
-    turn.call_id,
-    turn.seq,
-    turn.at_ms,
-    turn.speaker,
-    turn.text,
-    turn.tool,
-    turn.v2v_ms,
-    turn.stt_ms,
-    turn.llm_ms,
-    turn.tts_ms,
-    turn.model,
+    [
+      turn.id,
+      turn.call_id,
+      turn.seq,
+      turn.at_ms,
+      turn.speaker,
+      turn.text,
+      turn.tool,
+      turn.v2v_ms,
+      turn.stt_ms,
+      turn.llm_ms,
+      turn.tts_ms,
+      turn.model,
+    ],
   )
 
   const activity = input.activity ?? (input.speaker === 'CALLER' ? 'thinking' : 'speaking')
   const detail = input.activityDetail ?? (input.speaker === 'CALLER' ? 'awaiting reply' : 'agent turn')
   const v2v = input.v2vMs ?? call.v2v_ms
-  db.prepare(
-    `UPDATE calls SET activity = ?, activity_detail = ?, v2v_ms = COALESCE(?, v2v_ms) WHERE id = ?`,
-  ).run(activity, detail, v2v, call.id)
+  await run(`UPDATE calls SET activity = ?, activity_detail = ?, v2v_ms = COALESCE(?, v2v_ms) WHERE id = ?`, [
+    activity,
+    detail,
+    v2v,
+    call.id,
+  ])
 
   publish(call.tenant_id, { type: 'turn', callId: call.id })
   publish(call.tenant_id, { type: 'call.upsert', callId: call.id })
@@ -192,39 +195,44 @@ export function appendTurn(
 }
 
 /** Switches the model for the rest of a live session. The turns already spoken keep theirs. */
-export function setCallModel(call: CallRow, model: ModelRef | null): CallRow | undefined {
-  getDb()
-    .prepare(
-      `UPDATE calls SET model_provider = ?, model_name = ?, model_credential_id = ? WHERE id = ?`,
-    )
-    .run(model?.provider ?? null, model?.model ?? null, model?.credentialId ?? null, call.id)
+export async function setCallModel(call: CallRow, model: ModelRef | null): Promise<CallRow | undefined> {
+  await run(`UPDATE calls SET model_provider = ?, model_name = ?, model_credential_id = ? WHERE id = ?`, [
+    model?.provider ?? null,
+    model?.model ?? null,
+    model?.credentialId ?? null,
+    call.id,
+  ])
   publish(call.tenant_id, { type: 'call.upsert', callId: call.id })
   return getCall(call.tenant_id, call.id)
 }
 
-export function setCallActivity(call: CallRow, activity: CallActivity, detail: string): void {
-  getDb()
-    .prepare(`UPDATE calls SET activity = ?, activity_detail = ? WHERE id = ?`)
-    .run(activity, detail, call.id)
+export async function setCallActivity(
+  call: CallRow,
+  activity: CallActivity,
+  detail: string,
+): Promise<void> {
+  await run(`UPDATE calls SET activity = ?, activity_detail = ? WHERE id = ?`, [
+    activity,
+    detail,
+    call.id,
+  ])
   publish(call.tenant_id, { type: 'call.upsert', callId: call.id })
 }
 
-export function endCall(call: CallRow, outcome = 'Session ended'): CallRow {
+export async function endCall(call: CallRow, outcome = 'Session ended'): Promise<CallRow> {
   const ended = now()
-  getDb()
-    .prepare(
-      `UPDATE calls SET status = 'ended', ended_at = ?, activity = 'idle',
-       activity_detail = 'ended', outcome = ? WHERE id = ?`,
-    )
-    .run(ended, outcome, call.id)
-  getDb().prepare('DELETE FROM session_tokens WHERE call_id = ?').run(call.id)
+  await run(
+    `UPDATE calls SET status = 'ended', ended_at = ?, activity = 'idle',
+     activity_detail = 'ended', outcome = ? WHERE id = ?`,
+    [ended, outcome, call.id],
+  )
+  await run('DELETE FROM session_tokens WHERE call_id = ?', [call.id])
   publish(call.tenant_id, { type: 'call.ended', callId: call.id })
-  return getCall(call.tenant_id, call.id)!
+  return (await getCall(call.tenant_id, call.id))!
 }
 
-export function toLiveCall(row: CallRow): LiveCall {
-  const agent = getAgentById(row.agent_id)
-  const turns = listTurns(row.id)
+export async function toLiveCall(row: CallRow): Promise<LiveCall> {
+  const [agent, turns] = await Promise.all([getAgentById(row.agent_id), listTurns(row.id)])
   const last = turns.slice(-2)
   return {
     id: row.id,
@@ -252,8 +260,8 @@ export function toLiveCall(row: CallRow): LiveCall {
   }
 }
 
-export function toEndedCall(row: CallRow): EndedCall {
-  const agent = getAgentById(row.agent_id)
+export async function toEndedCall(row: CallRow): Promise<EndedCall> {
+  const agent = await getAgentById(row.agent_id)
   const durationMs = (row.ended_at ?? now()) - row.started_at
   return {
     id: row.id,
@@ -294,11 +302,7 @@ export interface LiveSnapshot {
   liveCount: number
 }
 
-export function getSnapshot(tenantId: string): LiveSnapshot {
-  const live = listLiveCalls(tenantId)
-  return {
-    live,
-    ended: listEndedCalls(tenantId, 12),
-    liveCount: live.length,
-  }
+export async function getSnapshot(tenantId: string): Promise<LiveSnapshot> {
+  const [live, ended] = await Promise.all([listLiveCalls(tenantId), listEndedCalls(tenantId, 12)])
+  return { live, ended, liveCount: live.length }
 }

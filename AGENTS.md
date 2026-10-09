@@ -50,7 +50,7 @@ is a decision to raise, not a dependency to install.
 | UI | React 19 | Local `useState`. `useActionState` for form pending and error state. Context only for shell-wide values, as `src/lib/fleet.tsx` and `runtime.tsx` already do. |
 | Language | TypeScript strict | Row interfaces in `src/lib/store/types.ts` are the source of truth and flow outward. No `any`. |
 | Styling | Tailwind v4 | `@theme` tokens in `src/app/globals.css`, used as classes. `src/components/ui/primitives.tsx` is the whole design system. |
-| Data | `node:sqlite`, no ORM | Every SQL string lives in `src/lib/store/*`. Postgres is the one planned swap. |
+| Data | Neon Postgres over `@neondatabase/serverless`, no ORM | Every SQL string lives in `src/lib/store/*` and every store function is async. `src/lib/db/index.ts` is the whole driver surface: `all`, `one` and `run`, with `?` placeholders rewritten to `$1..$n`. The schema is `src/lib/db/schema.sql`, applied by `pnpm db:push`. No ORM, no query builder, no second driver. |
 | Auth, humans | Clerk (`@clerk/nextjs`) | Landed. `clerkMiddleware()` in `src/proxy.ts` is the gate, `getAuth()` in `src/lib/auth/session.ts` turns a Clerk user into a tenant. There is no password path left. |
 | Auth, machines | Our API keys | `vs_sk_live_`, `vs_pk_live_`, `vst_`. Stays ours after the Clerk migration. Clerk never guards `/api/v1`. |
 | Realtime | SSE plus an in-process hub | `src/lib/realtime/hub.ts`. No WebSocket server, no Redis, no third-party realtime service. |
@@ -90,13 +90,19 @@ better flow is a defect.
 
 ```bash
 pnpm install
+vercel env pull .env.local    # Neon DATABASE_URL, plus the Clerk development keys
+pnpm db:push                  # applies src/lib/db/schema.sql, idempotent
 pnpm dev                      # http://localhost:3000
 pnpm seed                     # demo tenant, published agent, key pair, live calls
 eval "$(pnpm -s session --export)"   # $VS_COOKIE for a signed-in fetch
 ```
 
-Both scripts read `.env.local` for the Clerk development keys. A fresh clone gets them
-with `clerk env pull --file .env.local`; without them, neither script can run.
+Every script reads `.env.local`. It needs `DATABASE_URL` and `DATABASE_URL_UNPOOLED`
+from the Vercel project, and the Clerk development keys, which `clerk env pull --file
+.env.local` will add if the Vercel pull did not carry them. Without those, nothing runs.
+
+`pnpm db:push` is the only thing that writes DDL. Run it after any change to
+`schema.sql`, and once on a fresh clone.
 
 `pnpm seed` creates the demo operator as a real Clerk user, prints the login
 (`demo@voice.studio` / `voicestudio-local`) and a fresh key pair. It writes the tenant
@@ -105,8 +111,9 @@ drives the calls over `/api/v1` so the store, the hub and the monitor all see re
 traffic. Re-running is safe; it rotates only its own keys. `pnpm session` mints a short
 lived Clerk session, so re-run it rather than keeping `$VS_COOKIE` around.
 
-The database is `data/voice-studio.db`. `data/` and `*.db` are git-ignored. Deleting
-the file is the supported reset.
+There is no local database file any more. Local, preview and production all point at
+the same Neon project through `DATABASE_URL`, so a local `DELETE` deletes the row for
+everyone reading that branch. Use a Neon branch when you need to throw data away.
 
 Gates before you claim anything works:
 
@@ -135,16 +142,21 @@ HTTP-level check instead. Do not describe pixels you did not see.
 
 Each of these has already cost time. None is visible from the code you are editing.
 
-1. **The schema has no migrations.** `bootstrap()` in `src/lib/db/index.ts` runs
-   `CREATE TABLE IF NOT EXISTS`. On an existing database a new column in that SQL is
-   silently ignored, and the app then fails at query time. See the `studio-schema`
-   skill before changing a table.
-2. **SQLite is single-process, single-machine.** The repo is linked to the Vercel
-   project `voice-studio`, and a deploy will build green and then behave wrongly: the
-   filesystem is ephemeral and per-instance, so writes vanish and tenants differ
-   between requests. This is the gate on production, not permission.
+1. **There is no migration runner, only `pnpm db:push`.** `src/lib/db/schema.sql` is
+   the whole schema and every statement in it is `IF NOT EXISTS`, so a column added to
+   a `CREATE TABLE` is ignored on a database that already has that table. A new column
+   needs the `CREATE TABLE` edit *and* an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+   at the bottom of the file. Nothing runs DDL at request time, on purpose. See the
+   `studio-schema` skill before changing a table.
+2. **One Neon database serves local, preview and production.** The Vercel Marketplace
+   resource `voice-studio-db` is connected to all three environments of the project
+   `voice-studio`, so a laptop and a preview deploy write to the same rows. Branch the
+   Neon project before anything destructive. Production is no longer blocked by the
+   datastore; it is blocked by landmine 3.
 3. **The realtime hub is an in-process `Map`.** `src/lib/realtime/hub.ts` fans out
    only inside one server process. Any multi-instance deployment loses monitor events.
+   With the datastore shared this is now the one thing standing between the app and a
+   hosted release, so a monitor that goes quiet on Vercel is this and not the database.
 4. **The auth gate is `src/proxy.ts`.** Next 16 renamed middleware to proxy. The
    `createRouteMatcher` list passed to `clerkMiddleware()` is the entire gate: every
    route not in it calls `auth.protect()`. Adding a pattern there can expose an operator
@@ -162,9 +174,9 @@ Each of these has already cost time. None is visible from the code you are editi
    a PR, or a doc. Prefixes: `vs_sk_live_` secret, `vs_pk_live_` publishable, `vst_`
    per-session token.
 7. **`docs/` is stale in one specific way.** The briefing pack was written on
-   12 August 2026 and says the app is fixture-driven with no backend. Auth, SQLite and
-   the public API landed after it. Correct the claim in any doc you touch; do not cite
-   it as current status.
+   12 August 2026 and says the app is fixture-driven with no backend. Auth, the
+   datastore and the public API landed after it, and it still names SQLite. Correct the
+   claim in any doc you touch; do not cite it as current status.
 8. **Orbs are canvas, and budgeted.** `LIVE_ORB_BUDGET` in `LiveCallGrid.tsx` drops
    on-screen orbs to a static frame past 24 visible cards, so a wallboard degrades to
    stillness instead of jank. Never add a continuously repainting CSS animation
@@ -186,10 +198,13 @@ Each of these has already cost time. None is visible from the code you are editi
   `OPTIONS` and return `corsHeaders(req)` on every response.
 - **Mutations are server actions** in a `actions.ts` beside the store they call, not
   API routes. `/api/v1` is for other people's software, not for our own forms.
-- **Auth in a route** is `requireApiKey(req)` for client traffic, the operator session
-  helper for operator traffic, `resolveSessionToken(raw)` for a `vst_` token.
-  Publishable keys must never reach a server-side capability; the sessions route is the
-  pattern.
+- **Auth in a route** is `await requireApiKey(req)` for client traffic, the operator
+  session helper for operator traffic, `await resolveSessionToken(raw)` for a `vst_`
+  token. All three read the database, so all three are async. Publishable keys must
+  never reach a server-side capability; the sessions route is the pattern.
+- **Every store call is awaited.** A forgotten `await` on a store function is a truthy
+  Promise, which typecheck will not catch: a missing `await getAgentRow(...)` inside an
+  `if` reads as "found" for an agent that does not exist. Read a diff for this.
 - **Ids** come from `id('agt')` and `token()` in `src/lib/db/ids.ts`. No `uuid`, no
   incrementing integers.
 - **Colour** comes from the `@theme` tokens in `src/app/globals.css` as Tailwind
@@ -248,18 +263,21 @@ git tag -a v0.3.0 -m "v0.3.0" && git push origin v0.3.0   # after the PR merges
 
 | Environment | Branch | Data | Auth instance | Use it for |
 | --- | --- | --- | --- | --- |
-| local | any | `data/voice-studio.db` | Clerk development | real work, seeded traffic |
-| preview | PR / `dev` | ephemeral per instance | Clerk development | smoke test a UI change only |
-| production | `main` | blocked, see landmine 2 | Clerk production | nothing yet |
+| local | any | Neon `voice-studio-db` | Clerk development | real work, seeded traffic |
+| preview | PR / `dev` | Neon `voice-studio-db`, the same rows | Clerk development | smoke test a UI change |
+| production | `main` | Neon `voice-studio-db`, the same rows | Clerk production | blocked on landmine 3 |
 
-- A preview deploy of this app **cannot hold data**. Treat it as a screenshot machine,
-  and say so when you share the URL.
+- All three environments share one Neon database today. A preview deploy therefore
+  reads and writes real local data, which makes it useful and makes it dangerous. Split
+  it with a Neon branch per environment before anything ships to a user.
 - Secrets live in `vercel env` and the local `.env.local`, never in git. Document a new
   variable in `.env.example` **by name only**. To set one, print the command, never the
   value.
 - Development keys never reach production, production keys never reach a laptop.
 - Names in use: `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `XAI_API_KEY`,
-  `DATABASE_PATH`. `AUTH_SECRET` retired with the Clerk migration.
+  `CREDENTIAL_SECRET`, `DATABASE_URL`, `DATABASE_URL_UNPOOLED`. The Neon resource also
+  sets a `POSTGRES_*` and `PG*` set that nothing here reads. `AUTH_SECRET` retired with
+  the Clerk migration, `DATABASE_PATH` with the move off SQLite.
 
 ### Releasing
 
@@ -267,8 +285,9 @@ git tag -a v0.3.0 -m "v0.3.0" && git push origin v0.3.0   # after the PR merges
 2. Seed and verify the surfaces you touched, with the commands behind the claim.
 3. Scan the diff for secrets and for a stray `data/`, `.env` or `.vercel` file.
 4. Bump the version, PR `dev -> main`, tag after merge.
-5. Production deploy stays blocked on the datastore. Name the blast radius before any
-   deploy, preview included.
+5. Production deploy stays blocked on the in-process realtime hub, not on the
+   datastore. Name the blast radius before any deploy, preview included: a preview
+   writes to the same Neon rows your laptop does.
 
 ## 9. Skills in this repo
 

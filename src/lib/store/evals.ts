@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id } from '@/lib/db/ids'
 import { replyForEval } from '@/lib/media/complete'
 import { resolveSystemPrompt } from '@/lib/store/knowledge'
@@ -15,22 +15,21 @@ export const ASSERTION_LABELS: Record<AssertionKind, string> = {
   max_sentences: 'at most N sentences',
 }
 
-export function listCases(tenantId: string, agentId: string): EvalCaseRow[] {
-  return rows<EvalCaseRow>(
-    getDb()
-      .prepare('SELECT * FROM eval_cases WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at ASC')
-      .all(tenantId, agentId),
+export function listCases(tenantId: string, agentId: string): Promise<EvalCaseRow[]> {
+  return all<EvalCaseRow>(
+    'SELECT * FROM eval_cases WHERE tenant_id = ? AND agent_id = ? ORDER BY created_at ASC',
+    [tenantId, agentId],
   )
 }
 
-export function countCases(tenantId: string): number {
-  const n = getDb()
-    .prepare('SELECT COUNT(*) AS n FROM eval_cases WHERE tenant_id = ?')
-    .get(tenantId) as { n: number }
-  return Number(n.n) || 0
+export async function countCases(tenantId: string): Promise<number> {
+  const found = await one<{ n: number }>('SELECT COUNT(*) AS n FROM eval_cases WHERE tenant_id = ?', [
+    tenantId,
+  ])
+  return Number(found?.n) || 0
 }
 
-export function createCase(
+export async function createCase(
   tenantId: string,
   input: {
     agentId: string
@@ -40,8 +39,8 @@ export function createCase(
     assertionValue?: string
     maxMs?: number | null
   },
-): EvalCaseRow | undefined {
-  const agent = getAgentRow(tenantId, input.agentId)
+): Promise<EvalCaseRow | undefined> {
+  const agent = await getAgentRow(tenantId, input.agentId)
   if (!agent) return undefined
   const kind = KINDS.includes(input.assertionKind as AssertionKind)
     ? (input.assertionKind as AssertionKind)
@@ -57,13 +56,11 @@ export function createCase(
     max_ms: input.maxMs && Number.isFinite(input.maxMs) ? Math.round(input.maxMs) : null,
     created_at: now(),
   }
-  getDb()
-    .prepare(
-      `INSERT INTO eval_cases (
-         id, tenant_id, agent_id, name, utterance, assertion_kind, assertion_value, max_ms, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO eval_cases (
+       id, tenant_id, agent_id, name, utterance, assertion_kind, assertion_value, max_ms, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       testCase.id,
       testCase.tenant_id,
       testCase.agent_id,
@@ -73,41 +70,38 @@ export function createCase(
       testCase.assertion_value,
       testCase.max_ms,
       testCase.created_at,
-    )
+    ],
+  )
   return testCase
 }
 
-export function deleteCase(tenantId: string, caseId: string): void {
-  getDb().prepare('DELETE FROM eval_cases WHERE id = ? AND tenant_id = ?').run(caseId, tenantId)
+export async function deleteCase(tenantId: string, caseId: string): Promise<void> {
+  await run('DELETE FROM eval_cases WHERE id = ? AND tenant_id = ?', [caseId, tenantId])
 }
 
-export function latestRun(tenantId: string, agentId: string): EvalRunRow | undefined {
-  return row<EvalRunRow>(
-    getDb()
-      .prepare(
-        `SELECT * FROM eval_runs WHERE tenant_id = ? AND agent_id = ?
-         AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 1`,
-      )
-      .get(tenantId, agentId),
+export function latestRun(tenantId: string, agentId: string): Promise<EvalRunRow | undefined> {
+  return one<EvalRunRow>(
+    `SELECT * FROM eval_runs WHERE tenant_id = ? AND agent_id = ?
+     AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 1`,
+    [tenantId, agentId],
   )
 }
 
-export function previousRun(tenantId: string, agentId: string): EvalRunRow | undefined {
-  const runs = rows<EvalRunRow>(
-    getDb()
-      .prepare(
-        `SELECT * FROM eval_runs WHERE tenant_id = ? AND agent_id = ?
-         AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 2`,
-      )
-      .all(tenantId, agentId),
+export async function previousRun(
+  tenantId: string,
+  agentId: string,
+): Promise<EvalRunRow | undefined> {
+  const runs = await all<EvalRunRow>(
+    `SELECT * FROM eval_runs WHERE tenant_id = ? AND agent_id = ?
+     AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 2`,
+    [tenantId, agentId],
   )
   return runs[1]
 }
 
-export function listResults(runId: string): EvalResultRow[] {
-  return rows<EvalResultRow>(
-    getDb().prepare('SELECT * FROM eval_results WHERE run_id = ? ORDER BY rowid ASC').all(runId),
-  )
+/** Ordered by seq: Postgres has no implicit row order, so the column carries it. */
+export function listResults(runId: string): Promise<EvalResultRow[]> {
+  return all<EvalResultRow>('SELECT * FROM eval_results WHERE run_id = ? ORDER BY seq ASC', [runId])
 }
 
 export interface RunOutcome {
@@ -125,24 +119,25 @@ export interface RunOutcome {
  * another model can be wrong, and a gate that can be wrong is worse than none.
  */
 export async function runSuite(tenantId: string, agentId: string): Promise<RunOutcome> {
-  const db = getDb()
-  const agent = getAgentRow(tenantId, agentId)
+  const agent = await getAgentRow(tenantId, agentId)
   if (!agent) return { runId: '', passed: 0, total: 0, error: 'Agent not found.' }
-  const cases = listCases(tenantId, agentId)
+  const cases = await listCases(tenantId, agentId)
   if (cases.length === 0) {
     return { runId: '', passed: 0, total: 0, error: 'Add a case before running the suite.' }
   }
 
   const runId = id('evr')
   const started = now()
-  db.prepare(
+  await run(
     `INSERT INTO eval_runs (id, tenant_id, agent_id, agent_version, started_at, finished_at, passed, total, p95_ms)
      VALUES (?, ?, ?, ?, ?, NULL, 0, ?, NULL)`,
-  ).run(runId, tenantId, agentId, agent.version, started, cases.length)
+    [runId, tenantId, agentId, agent.version, started, cases.length],
+  )
 
-  const resolved = resolveSystemPrompt(tenantId, agentId, agent.system_prompt)
+  const resolved = await resolveSystemPrompt(tenantId, agentId, agent.system_prompt)
   const durations: number[] = []
   let passed = 0
+  let seq = 0
 
   for (const testCase of cases) {
     const began = Date.now()
@@ -166,31 +161,34 @@ export async function runSuite(tenantId: string, agentId: string): Promise<RunOu
     const turnMs = Date.now() - began
     durations.push(turnMs)
     if (ok) passed += 1
-    db.prepare(
+    seq += 1
+    await run(
       `INSERT INTO eval_results (
-         id, run_id, case_id, case_name, utterance, assertion, reply, turn_ms, pass, detail
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id('evx'),
-      runId,
-      testCase.id,
-      testCase.name,
-      testCase.utterance,
-      describeAssertion(testCase),
-      reply,
-      turnMs,
-      ok ? 1 : 0,
-      detail,
+         id, run_id, seq, case_id, case_name, utterance, assertion, reply, turn_ms, pass, detail
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id('evx'),
+        runId,
+        seq,
+        testCase.id,
+        testCase.name,
+        testCase.utterance,
+        describeAssertion(testCase),
+        reply,
+        turnMs,
+        ok ? 1 : 0,
+        detail,
+      ],
     )
   }
 
-  db.prepare('UPDATE eval_runs SET finished_at = ?, passed = ?, total = ?, p95_ms = ? WHERE id = ?').run(
+  await run('UPDATE eval_runs SET finished_at = ?, passed = ?, total = ?, p95_ms = ? WHERE id = ?', [
     now(),
     passed,
     cases.length,
     percentile(durations, 0.95),
     runId,
-  )
+  ])
   return { runId, passed, total: cases.length }
 }
 

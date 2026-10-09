@@ -210,6 +210,8 @@ export interface EvalRunRow {
 export interface EvalResultRow {
   id: string
   run_id: string
+  /** Order the cases ran in. Postgres has no rowid to fall back on. */
+  seq: number
   case_id: string
   case_name: string
   utterance: string

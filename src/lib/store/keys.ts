@@ -1,24 +1,21 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id, sha256, token } from '@/lib/db/ids'
 import type { ApiKeyRow, KeyKind } from '@/lib/store/types'
 
-export function listKeys(tenantId: string): Omit<ApiKeyRow, 'key_hash'>[] {
-  return rows<Omit<ApiKeyRow, 'key_hash'>>(
-    getDb()
-      .prepare(
-        `SELECT id, tenant_id, name, prefix, kind, origins_json, last_used_at, created_at, revoked_at
-         FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC`,
-      )
-      .all(tenantId),
+export function listKeys(tenantId: string): Promise<Omit<ApiKeyRow, 'key_hash'>[]> {
+  return all<Omit<ApiKeyRow, 'key_hash'>>(
+    `SELECT id, tenant_id, name, prefix, kind, origins_json, last_used_at, created_at, revoked_at
+     FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC`,
+    [tenantId],
   )
 }
 
-export function createKey(
+export async function createKey(
   tenantId: string,
   input: { name: string; kind: KeyKind; origins?: string[] },
-): { row: Omit<ApiKeyRow, 'key_hash'>; secret: string } {
+): Promise<{ row: Omit<ApiKeyRow, 'key_hash'>; secret: string }> {
   const prefixKind = input.kind === 'publishable' ? 'pk' : 'sk'
   const secret = `vs_${prefixKind}_live_${token(24)}`
   const created = now()
@@ -34,13 +31,11 @@ export function createKey(
     created_at: created,
     revoked_at: null,
   }
-  getDb()
-    .prepare(
-      `INSERT INTO api_keys (
-        id, tenant_id, name, prefix, key_hash, kind, origins_json, last_used_at, created_at, revoked_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO api_keys (
+      id, tenant_id, name, prefix, key_hash, kind, origins_json, last_used_at, created_at, revoked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       row.id,
       row.tenant_id,
       row.name,
@@ -51,22 +46,24 @@ export function createKey(
       row.last_used_at,
       row.created_at,
       row.revoked_at,
-    )
+    ],
+  )
   const { key_hash: _, ...publicRow } = row
   return { row: publicRow, secret }
 }
 
-export function revokeKey(tenantId: string, keyId: string): boolean {
-  const result = getDb()
-    .prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL`)
-    .run(now(), keyId, tenantId)
-  return Number(result.changes) > 0
+export async function revokeKey(tenantId: string, keyId: string): Promise<boolean> {
+  const changed = await run(
+    `UPDATE api_keys SET revoked_at = ? WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL`,
+    [now(), keyId, tenantId],
+  )
+  return changed > 0
 }
 
-export function resolveApiKey(raw: string): ApiKeyRow | undefined {
+export async function resolveApiKey(raw: string): Promise<ApiKeyRow | undefined> {
   if (!raw.startsWith('vs_')) return undefined
-  const found = row<ApiKeyRow>(getDb().prepare(`SELECT * FROM api_keys WHERE key_hash = ?`).get(sha256(raw)))
+  const found = await one<ApiKeyRow>(`SELECT * FROM api_keys WHERE key_hash = ?`, [sha256(raw)])
   if (!found || found.revoked_at) return undefined
-  getDb().prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(now(), found.id)
+  await run('UPDATE api_keys SET last_used_at = ? WHERE id = ?', [now(), found.id])
   return found
 }

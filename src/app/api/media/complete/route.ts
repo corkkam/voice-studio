@@ -23,12 +23,12 @@ export async function POST(req: Request) {
   if (!text) return apiError('text is required', 400, corsHeaders(req))
 
   const auth = await getAuth()
-  let call = body.token ? resolveSessionToken(body.token)?.call : undefined
+  let call = body.token ? (await resolveSessionToken(body.token))?.call : undefined
   if (!call && body.sessionId) {
-    if (auth) call = getCall(auth.tenant.id, body.sessionId)
+    if (auth) call = await getCall(auth.tenant.id, body.sessionId)
     if (!call) {
       const raw = bearer(req)
-      if (raw?.startsWith('vst_')) call = resolveSessionToken(raw)?.call
+      if (raw?.startsWith('vst_')) call = (await resolveSessionToken(raw))?.call
     }
   }
   if (!call || call.status !== 'live') return apiError('Live session not found', 404, corsHeaders(req))
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   // A session token proves the session, not the tenant's wallet. Only an operator
   // in the studio or a secret key may aim this turn at a different model.
   const privileged =
-    auth?.tenant.id === call.tenant_id || requireSecretKey(req)?.tenant_id === call.tenant_id
+    auth?.tenant.id === call.tenant_id || (await requireSecretKey(req))?.tenant_id === call.tenant_id
 
   let override: ModelRef | undefined
   if (body.model !== undefined && body.model !== null) {

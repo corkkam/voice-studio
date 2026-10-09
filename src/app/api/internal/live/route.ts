@@ -11,13 +11,30 @@ export async function GET(req: Request) {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     start(controller) {
+      let closed = false
+      /*
+       * The snapshot is a database round trip now, so a hub event and the first
+       * frame can be in flight together. Each enqueue is one whole SSE frame and
+       * the client replaces its state wholesale, so an overtaking frame is stale
+       * data at worst, never a torn one. `closed` keeps a late frame from
+       * enqueueing after abort, which throws.
+       */
       const send = () => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(getSnapshot(auth.tenant.id))}\n\n`))
+        getSnapshot(auth.tenant.id)
+          .then((snapshot) => {
+            if (closed) return
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`))
+          })
+          // A rejected query here has nobody to return it to, and an unhandled
+          // rejection takes the whole server down. The stream stays open and the
+          // next event tries again.
+          .catch((error) => console.error('live snapshot failed', error))
       }
       send()
       const unsub = subscribe(auth.tenant.id, send)
       const ping = setInterval(() => controller.enqueue(encoder.encode(`: ping\n\n`)), 15000)
       const abort = () => {
+        closed = true
         clearInterval(ping)
         unsub()
         try {

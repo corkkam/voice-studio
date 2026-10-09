@@ -1,7 +1,6 @@
 import { corsHeaders, json, apiError } from '@/lib/api/http'
 import { requireApiKey } from '@/lib/api/guard'
 import { listAgents } from '@/lib/store/agents'
-import { getDb } from '@/lib/db'
 
 export const runtime = 'nodejs'
 
@@ -10,10 +9,9 @@ export function OPTIONS(req: Request) {
 }
 
 export async function GET(req: Request) {
-  getDb()
-  const key = requireApiKey(req)
+  const key = await requireApiKey(req)
   if (!key) return apiError('Unauthorized', 401, corsHeaders(req))
-  const agents = listAgents(key.tenant_id).map((agent) => ({
+  const agents = (await listAgents(key.tenant_id)).map((agent) => ({
     id: agent.id,
     name: agent.name,
     locale: agent.locale,

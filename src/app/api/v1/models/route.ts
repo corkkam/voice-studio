@@ -14,10 +14,10 @@ export function OPTIONS(req: Request) {
  * the tenant holds a key for, which is not a browser's business.
  */
 export async function GET(req: Request) {
-  const key = requireSecretKey(req)
+  const key = await requireSecretKey(req)
   if (!key) return apiError('A secret key is required.', 401, corsHeaders(req))
 
-  const credentials = listCredentials(key.tenant_id).filter((c) => !c.revoked_at)
+  const credentials = (await listCredentials(key.tenant_id)).filter((c) => !c.revoked_at)
   const held = new Set(credentials.map((c) => c.provider))
 
   return json(

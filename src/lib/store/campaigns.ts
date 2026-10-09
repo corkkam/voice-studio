@@ -1,25 +1,29 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id } from '@/lib/db/ids'
 import type { CampaignRow } from '@/lib/store/types'
 
-export function listCampaigns(tenantId: string): CampaignRow[] {
-  return rows<CampaignRow>(
-    getDb().prepare('SELECT * FROM campaigns WHERE tenant_id = ? ORDER BY created_at DESC').all(tenantId),
-  )
+export function listCampaigns(tenantId: string): Promise<CampaignRow[]> {
+  return all<CampaignRow>('SELECT * FROM campaigns WHERE tenant_id = ? ORDER BY created_at DESC', [
+    tenantId,
+  ])
 }
 
-export function getCampaign(tenantId: string, campaignId: string): CampaignRow | undefined {
-  return row<CampaignRow>(
-    getDb().prepare('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ?').get(campaignId, tenantId),
-  )
+export function getCampaign(
+  tenantId: string,
+  campaignId: string,
+): Promise<CampaignRow | undefined> {
+  return one<CampaignRow>('SELECT * FROM campaigns WHERE id = ? AND tenant_id = ?', [
+    campaignId,
+    tenantId,
+  ])
 }
 
-export function createCampaign(
+export async function createCampaign(
   tenantId: string,
   input: { name: string; agentId?: string },
-): CampaignRow {
+): Promise<CampaignRow> {
   const created = now()
   const row: CampaignRow = {
     id: id('cmp'),
@@ -29,11 +33,10 @@ export function createCampaign(
     status: 'DRAFT',
     created_at: created,
   }
-  getDb()
-    .prepare(
-      `INSERT INTO campaigns (id, tenant_id, agent_id, name, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .run(row.id, row.tenant_id, row.agent_id, row.name, row.status, row.created_at)
+  await run(
+    `INSERT INTO campaigns (id, tenant_id, agent_id, name, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [row.id, row.tenant_id, row.agent_id, row.name, row.status, row.created_at],
+  )
   return row
 }

@@ -12,18 +12,18 @@ import {
 
 export default async function KnowledgePage() {
   const auth = await requireAuth()
-  const snippets = listSnippets(auth.tenant.id)
-  const tools = listTools(auth.tenant.id)
-  const agents = listAgentSummaries(auth.tenant.id).map((agent) => ({
+  const snippets = await listSnippets(auth.tenant.id)
+  const tools = await listTools(auth.tenant.id)
+  const agents = (await listAgentSummaries(auth.tenant.id)).map((agent) => ({
     id: agent.id,
     name: agent.name,
   }))
 
   // The preview is for the first agent, because a resolved prompt is per agent
   // and one worked example says more than a count of snippets does.
-  const first = agents[0] ? getAgentRow(auth.tenant.id, agents[0].id) : undefined
+  const first = agents[0] ? await getAgentRow(auth.tenant.id, agents[0].id) : undefined
   const resolved = first
-    ? resolveSystemPrompt(auth.tenant.id, first.id, first.system_prompt)
+    ? await resolveSystemPrompt(auth.tenant.id, first.id, first.system_prompt)
     : undefined
 
   return (
@@ -55,7 +55,7 @@ export default async function KnowledgePage() {
           }))}
           agents={agents}
           ceiling={PROMPT_CEILING}
-          toolIntents7d={countToolIntents(auth.tenant.id)}
+          toolIntents7d={await countToolIntents(auth.tenant.id)}
           preview={
             first && resolved
               ? {

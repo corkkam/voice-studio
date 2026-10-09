@@ -12,9 +12,9 @@ const GRID = 'grid grid-cols-[2.1fr_1.6fr_1fr_0.8fr_0.8fr_0.8fr] gap-[14px]'
 
 export default async function AgentsPage() {
   const auth = await requireAuth()
-  const agents = listAgents(auth.tenant.id)
-  const metrics = studioMetrics(auth.tenant.id)
-  const live = countLive(auth.tenant.id)
+  const agents = await listAgents(auth.tenant.id)
+  const metrics = await studioMetrics(auth.tenant.id)
+  const live = await countLive(auth.tenant.id)
   const liveAgents = agents.filter((a) => a.status === 'live').length
 
   return (

@@ -9,20 +9,20 @@ export interface CallFilter {
   negativeSentiment?: boolean
 }
 
-export function sliceCalls(
+export async function sliceCalls(
   tenantId: string,
   offset: number,
   limit: number,
   filter?: CallFilter,
-): LiveCall[] {
-  return listLiveCalls(tenantId)
-    .filter((call) => matches(call, filter))
-    .slice(offset, offset + limit)
+): Promise<LiveCall[]> {
+  const live = await listLiveCalls(tenantId)
+  return live.filter((call) => matches(call, filter)).slice(offset, offset + limit)
 }
 
-export function countCalls(tenantId: string, filter?: CallFilter): number {
+export async function countCalls(tenantId: string, filter?: CallFilter): Promise<number> {
   if (!filter) return countLive(tenantId)
-  return listLiveCalls(tenantId).filter((call) => matches(call, filter)).length
+  const live = await listLiveCalls(tenantId)
+  return live.filter((call) => matches(call, filter)).length
 }
 
 export function snapshotFor(tenantId: string) {

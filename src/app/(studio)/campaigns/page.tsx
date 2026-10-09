@@ -8,8 +8,8 @@ import { NewCampaignForm } from '@/components/campaign/NewCampaignForm'
 
 export default async function CampaignsPage() {
   const auth = await requireAuth()
-  const campaigns = listCampaigns(auth.tenant.id)
-  const agents = listAgents(auth.tenant.id)
+  const campaigns = await listCampaigns(auth.tenant.id)
+  const agents = await listAgents(auth.tenant.id)
 
   return (
     <>

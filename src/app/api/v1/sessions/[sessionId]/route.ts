@@ -11,21 +11,21 @@ export function OPTIONS(req: Request) {
   return new Response(null, { status: 204, headers: corsHeaders(req) })
 }
 
-function loadCall(req: Request, sessionId: string) {
+async function loadCall(req: Request, sessionId: string) {
   const raw = bearer(req)
   if (raw?.startsWith('vst_')) {
-    const resolved = resolveSessionToken(raw)
+    const resolved = await resolveSessionToken(raw)
     if (!resolved || resolved.call.id !== sessionId) return null
     return resolved.call
   }
-  const key = requireApiKey(req)
+  const key = await requireApiKey(req)
   if (!key) return null
-  return getCall(key.tenant_id, sessionId) ?? null
+  return (await getCall(key.tenant_id, sessionId)) ?? null
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await ctx.params
-  const call = loadCall(req, sessionId)
+  const call = await loadCall(req, sessionId)
   if (!call) return apiError('Session not found', 404)
   return json(
     {
@@ -44,32 +44,32 @@ export async function GET(req: Request, ctx: { params: Promise<{ sessionId: stri
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await ctx.params
-  const call = loadCall(req, sessionId)
+  const call = await loadCall(req, sessionId)
   if (!call) return apiError('Session not found', 404)
   const body = await readJson<{ activity?: CallActivity; detail?: string; model?: unknown }>(req)
-  if (body.activity) setCallActivity(call, body.activity, body.detail || call.activity_detail)
+  if (body.activity) await setCallActivity(call, body.activity, body.detail || call.activity_detail)
 
   let model = call.model_provider ? `${call.model_provider}/${call.model_name}` : null
   if (body.model !== undefined) {
     // Switching mid-call spends the tenant's provider key, so a session token is
     // not enough here even though it is enough to speak a turn.
-    const key = requireSecretKey(req)
+    const key = await requireSecretKey(req)
     if (!key || key.tenant_id !== call.tenant_id) {
       return apiError('A secret key is required to switch the model.', 403)
     }
     if (body.model === null) {
-      setCallModel(call, null)
+      await setCallModel(call, null)
       model = null
     } else {
       const ref = parseModelRef(body.model)
       if (!ref) return apiError('model must be "provider/model" or { provider, model }')
       try {
-        assertRoutable(call.tenant_id, ref)
+        await assertRoutable(call.tenant_id, ref)
       } catch (error) {
         if (error instanceof ModelRouteError) return apiError(error.message, 422)
         throw error
       }
-      setCallModel(call, ref)
+      await setCallModel(call, ref)
       model = `${ref.provider}/${ref.model}`
     }
   }
@@ -79,8 +79,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ sessionId: st
 
 export async function DELETE(req: Request, ctx: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await ctx.params
-  const call = loadCall(req, sessionId)
+  const call = await loadCall(req, sessionId)
   if (!call) return apiError('Session not found', 404)
-  const ended = endCall(call)
+  const ended = await endCall(call)
   return json({ id: ended.id, status: ended.status }, 200, corsHeaders(req))
 }

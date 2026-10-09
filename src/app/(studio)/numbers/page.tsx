@@ -24,9 +24,9 @@ const WORKING = [
 
 export default async function NumbersPage() {
   const auth = await requireAuth()
-  const agents = listAgentSummaries(auth.tenant.id)
+  const agents = await listAgentSummaries(auth.tenant.id)
   const byId = new Map(agents.map((agent) => [agent.id, agent.name]))
-  const intents = listNumberIntents(auth.tenant.id)
+  const intents = await listNumberIntents(auth.tenant.id)
 
   return (
     <>

@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id } from '@/lib/db/ids'
 import { decryptSecret, encryptSecret, secretHint } from '@/lib/db/secrets'
 import { getProvider } from '@/lib/models/catalog'
@@ -9,21 +9,18 @@ import type { ProviderCredential, ProviderCredentialRow } from '@/lib/store/type
 const PUBLIC_COLUMNS = `id, tenant_id, provider, label, base_url, hint,
   created_at, updated_at, last_used_at, revoked_at`
 
-export function listCredentials(tenantId: string): ProviderCredential[] {
-  return rows<ProviderCredential>(
-    getDb()
-      .prepare(
-        `SELECT ${PUBLIC_COLUMNS} FROM provider_credentials
-         WHERE tenant_id = ? ORDER BY created_at DESC`,
-      )
-      .all(tenantId),
+export function listCredentials(tenantId: string): Promise<ProviderCredential[]> {
+  return all<ProviderCredential>(
+    `SELECT ${PUBLIC_COLUMNS} FROM provider_credentials
+     WHERE tenant_id = ? ORDER BY created_at DESC`,
+    [tenantId],
   )
 }
 
-export function createCredential(
+export async function createCredential(
   tenantId: string,
   input: { provider: string; label?: string; secret: string; baseUrl?: string },
-): ProviderCredential {
+): Promise<ProviderCredential> {
   const provider = getProvider(input.provider)
   if (!provider) throw new Error('Unknown provider.')
   const secret = input.secret.trim()
@@ -44,14 +41,12 @@ export function createCredential(
     last_used_at: null,
     revoked_at: null,
   }
-  getDb()
-    .prepare(
-      `INSERT INTO provider_credentials (
-        id, tenant_id, provider, label, base_url, secret_enc, hint,
-        created_at, updated_at, last_used_at, revoked_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO provider_credentials (
+      id, tenant_id, provider, label, base_url, secret_enc, hint,
+      created_at, updated_at, last_used_at, revoked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       record.id,
       record.tenant_id,
       record.provider,
@@ -63,38 +58,40 @@ export function createCredential(
       record.updated_at,
       record.last_used_at,
       record.revoked_at,
-    )
+    ],
+  )
   return record
 }
 
-export function revokeCredential(tenantId: string, credentialId: string): boolean {
-  const result = getDb()
-    .prepare(
-      `UPDATE provider_credentials SET revoked_at = ?, updated_at = ?
-       WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL`,
-    )
-    .run(now(), now(), credentialId, tenantId)
-  return Number(result.changes) > 0
+export async function revokeCredential(tenantId: string, credentialId: string): Promise<boolean> {
+  const changed = await run(
+    `UPDATE provider_credentials SET revoked_at = ?, updated_at = ?
+     WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL`,
+    [now(), now(), credentialId, tenantId],
+  )
+  return changed > 0
 }
 
-export function getCredential(tenantId: string, credentialId: string): ProviderCredential | undefined {
-  return row<ProviderCredential>(
-    getDb()
-      .prepare(`SELECT ${PUBLIC_COLUMNS} FROM provider_credentials WHERE id = ? AND tenant_id = ?`)
-      .get(credentialId, tenantId),
+export function getCredential(
+  tenantId: string,
+  credentialId: string,
+): Promise<ProviderCredential | undefined> {
+  return one<ProviderCredential>(
+    `SELECT ${PUBLIC_COLUMNS} FROM provider_credentials WHERE id = ? AND tenant_id = ?`,
+    [credentialId, tenantId],
   )
 }
 
 /** The newest live credential for a provider, so an agent can name a provider and nothing else. */
-export function findCredential(tenantId: string, provider: string): ProviderCredential | undefined {
-  return row<ProviderCredential>(
-    getDb()
-      .prepare(
-        `SELECT ${PUBLIC_COLUMNS} FROM provider_credentials
-         WHERE tenant_id = ? AND provider = ? AND revoked_at IS NULL
-         ORDER BY created_at DESC LIMIT 1`,
-      )
-      .get(tenantId, provider),
+export function findCredential(
+  tenantId: string,
+  provider: string,
+): Promise<ProviderCredential | undefined> {
+  return one<ProviderCredential>(
+    `SELECT ${PUBLIC_COLUMNS} FROM provider_credentials
+     WHERE tenant_id = ? AND provider = ? AND revoked_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    [tenantId, provider],
   )
 }
 
@@ -102,13 +99,15 @@ export function findCredential(tenantId: string, provider: string): ProviderCred
  * The only path that decrypts. Stamps `last_used_at` so a stale key is visible on
  * the keys screen. Callers must not log or return the value.
  */
-export function useCredentialSecret(tenantId: string, credentialId: string): string | undefined {
-  const found = row<ProviderCredentialRow>(
-    getDb()
-      .prepare('SELECT * FROM provider_credentials WHERE id = ? AND tenant_id = ?')
-      .get(credentialId, tenantId),
+export async function useCredentialSecret(
+  tenantId: string,
+  credentialId: string,
+): Promise<string | undefined> {
+  const found = await one<ProviderCredentialRow>(
+    'SELECT * FROM provider_credentials WHERE id = ? AND tenant_id = ?',
+    [credentialId, tenantId],
   )
   if (!found || found.revoked_at) return undefined
-  getDb().prepare('UPDATE provider_credentials SET last_used_at = ? WHERE id = ?').run(now(), found.id)
+  await run('UPDATE provider_credentials SET last_used_at = ? WHERE id = ?', [now(), found.id])
   return decryptSecret(found.secret_enc)
 }

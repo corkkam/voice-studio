@@ -13,10 +13,10 @@ export default async function CallDetailPage({
 }) {
   const auth = await requireAuth()
   const { callId } = await params
-  const call = getCall(auth.tenant.id, callId)
+  const call = await getCall(auth.tenant.id, callId)
   if (!call) notFound()
-  const agent = getAgentById(call.agent_id)
-  const turns = listTurns(call.id)
+  const agent = await getAgentById(call.agent_id)
+  const turns = await listTurns(call.id)
   const durationSec = Math.max(
     0,
     Math.floor(((call.ended_at ?? Date.now()) - call.started_at) / 1000),

@@ -12,9 +12,12 @@ proves nothing. Follow this order.
 ## 1. Boot
 
 ```bash
+pnpm db:push                    # once per clone, or after a schema.sql change
 lsof -ti tcp:3000 || (pnpm dev > /tmp/vs-dev.log 2>&1 &)
 for i in $(seq 1 40); do sleep 1; curl -s -o /dev/null http://localhost:3000/login && break; done
 ```
+
+`.env.local` needs `DATABASE_URL` before any of this: `vercel env pull .env.local`.
 
 Ready in about 2 seconds. Keep the log; runtime errors land there, not in the terminal
 you are watching. Do not kill a dev server another session may own without saying so.
@@ -109,10 +112,13 @@ visual check. Report the HTTP-level evidence and say the screenshot is outstandi
 
 ## 6. Reset
 
+There is no local database file to delete. Local, preview and production all point at
+the one Neon database `voice-studio-db`, so a reset here is a reset for everyone. Ask
+first, every time, and prefer a Neon branch over dropping rows.
+
 ```bash
-rm -f data/voice-studio.db data/voice-studio.db-shm data/voice-studio.db-wal
+pnpm db:push        # creates anything missing, idempotent, destroys nothing
 ```
 
-Git-ignored, so this destroys only local state. Restart the server afterwards so the
-schema is recreated, then re-seed. Ask first if the database might hold work another
-session needs.
+`pnpm seed` is the safe repeat: it adopts the existing demo workspace, republishes the
+seeded agent and rotates only its own `Seed %` keys.

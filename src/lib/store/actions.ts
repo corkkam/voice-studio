@@ -24,7 +24,7 @@ export async function createAgentAction(_prev: FormState, form: FormData): Promi
   const auth = await requireAuth()
   const name = String(form.get('name') ?? '').trim()
   if (name.length < 2) return { error: 'Give the agent a name.' }
-  const agent = createAgent(auth.tenant.id, {
+  const agent = await createAgent(auth.tenant.id, {
     name,
     locale: String(form.get('locale') ?? 'en').trim(),
     summary: String(form.get('summary') ?? '').trim(),
@@ -36,8 +36,8 @@ export async function createAgentAction(_prev: FormState, form: FormData): Promi
 export async function saveAgentAction(_prev: FormState, form: FormData): Promise<FormState> {
   const auth = await requireAuth()
   const agentId = String(form.get('agentId') ?? '')
-  if (!getAgentRow(auth.tenant.id, agentId)) return { error: 'Agent not found.' }
-  updateAgent(auth.tenant.id, agentId, {
+  if (!(await getAgentRow(auth.tenant.id, agentId))) return { error: 'Agent not found.' }
+  await updateAgent(auth.tenant.id, agentId, {
     name: String(form.get('name') ?? ''),
     summary: String(form.get('summary') ?? ''),
     locale: String(form.get('locale') ?? ''),
@@ -50,7 +50,7 @@ export async function saveAgentAction(_prev: FormState, form: FormData): Promise
 
 export async function publishAgentAction(agentId: string): Promise<void> {
   const auth = await requireAuth()
-  updateAgent(auth.tenant.id, agentId, { status: 'live' })
+  await updateAgent(auth.tenant.id, agentId, { status: 'live' })
   revalidatePath(`/agents/${agentId}`)
   revalidatePath('/agents')
 }
@@ -59,14 +59,14 @@ export async function createKeyAction(_prev: FormState, form: FormData): Promise
   const auth = await requireAuth()
   const kind = String(form.get('kind') ?? 'secret') === 'publishable' ? 'publishable' : 'secret'
   const name = String(form.get('name') ?? '').trim()
-  const { secret } = createKey(auth.tenant.id, { name, kind })
+  const { secret } = await createKey(auth.tenant.id, { name, kind })
   revalidatePath('/keys')
   return { secret }
 }
 
 export async function revokeKeyAction(keyId: string): Promise<void> {
   const auth = await requireAuth()
-  revokeKey(auth.tenant.id, keyId)
+  await revokeKey(auth.tenant.id, keyId)
   revalidatePath('/keys')
 }
 
@@ -82,7 +82,7 @@ export async function addCredentialAction(_prev: FormState, form: FormData): Pro
   const secret = String(form.get('secret') ?? '').trim()
   if (!secret) return { error: 'Paste the provider key.' }
   try {
-    createCredential(auth.tenant.id, {
+    await createCredential(auth.tenant.id, {
       provider: String(form.get('provider') ?? ''),
       label: String(form.get('label') ?? '').trim(),
       secret,
@@ -97,7 +97,7 @@ export async function addCredentialAction(_prev: FormState, form: FormData): Pro
 
 export async function revokeCredentialAction(credentialId: string): Promise<void> {
   const auth = await requireAuth()
-  revokeCredential(auth.tenant.id, credentialId)
+  await revokeCredential(auth.tenant.id, credentialId)
   revalidatePath('/keys')
 }
 
@@ -105,14 +105,14 @@ export async function revokeCredentialAction(credentialId: string): Promise<void
 export async function saveAgentModelAction(_prev: FormState, form: FormData): Promise<FormState> {
   const auth = await requireAuth()
   const agentId = String(form.get('agentId') ?? '')
-  if (!getAgentRow(auth.tenant.id, agentId)) return { error: 'Agent not found.' }
+  if (!(await getAgentRow(auth.tenant.id, agentId))) return { error: 'Agent not found.' }
 
   const provider = String(form.get('provider') ?? '').trim()
   const model = String(form.get('model') ?? '').trim()
   const credentialId = String(form.get('credentialId') ?? '').trim()
 
   if (!provider) {
-    updateAgent(auth.tenant.id, agentId, { model_provider: '', model_name: '', model_credential_id: null })
+    await updateAgent(auth.tenant.id, agentId, { model_provider: '', model_name: '', model_credential_id: null })
     revalidatePath(`/agents/${agentId}`)
     revalidatePath('/agents')
     return { saved: true }
@@ -121,12 +121,12 @@ export async function saveAgentModelAction(_prev: FormState, form: FormData): Pr
   const ref = parseModelRef({ provider, model, credentialId: credentialId || undefined })
   if (!ref) return { error: 'Pick a provider and give a model id.' }
   try {
-    assertRoutable(auth.tenant.id, ref)
+    await assertRoutable(auth.tenant.id, ref)
   } catch (error) {
     if (error instanceof ModelRouteError) return { error: error.message }
     throw error
   }
-  updateAgent(auth.tenant.id, agentId, {
+  await updateAgent(auth.tenant.id, agentId, {
     model_provider: ref.provider,
     model_name: ref.model,
     model_credential_id: ref.credentialId ?? null,
@@ -141,7 +141,7 @@ export async function createCampaignAction(_prev: FormState, form: FormData): Pr
   const name = String(form.get('name') ?? '').trim()
   if (name.length < 2) return { error: 'Give the campaign a name.' }
   const agentId = String(form.get('agentId') ?? '') || undefined
-  const campaign = createCampaign(auth.tenant.id, { name, agentId })
+  const campaign = await createCampaign(auth.tenant.id, { name, agentId })
   redirect(`/campaigns/${campaign.id}`)
 }
 
@@ -151,7 +151,7 @@ export async function createVoiceAction(_prev: FormState, form: FormData): Promi
   const auth = await requireAuth()
   const name = String(form.get('name') ?? '').trim()
   if (name.length < 2) return { error: 'Give the preset a name.' }
-  createVoice(auth.tenant.id, {
+  await createVoice(auth.tenant.id, {
     name,
     locale: String(form.get('locale') ?? 'en-IN'),
     familyHint: String(form.get('familyHint') ?? 'any'),
@@ -168,7 +168,7 @@ export async function updateVoiceAction(_prev: FormState, form: FormData): Promi
   const voiceId = String(form.get('voiceId') ?? '')
   const name = String(form.get('name') ?? '').trim()
   if (name.length < 2) return { error: 'Give the preset a name.' }
-  updateVoice(auth.tenant.id, voiceId, {
+  await updateVoice(auth.tenant.id, voiceId, {
     name,
     locale: String(form.get('locale') ?? ''),
     familyHint: String(form.get('familyHint') ?? ''),
@@ -182,20 +182,20 @@ export async function updateVoiceAction(_prev: FormState, form: FormData): Promi
 
 export async function setDefaultVoiceAction(voiceId: string): Promise<void> {
   const auth = await requireAuth()
-  setDefaultVoice(auth.tenant.id, voiceId)
+  await setDefaultVoice(auth.tenant.id, voiceId)
   revalidatePath('/voices')
 }
 
 export async function deleteVoiceAction(voiceId: string): Promise<void> {
   const auth = await requireAuth()
-  deleteVoice(auth.tenant.id, voiceId)
+  await deleteVoice(auth.tenant.id, voiceId)
   revalidatePath('/voices')
   revalidatePath('/agents')
 }
 
 export async function bindAgentVoiceAction(agentId: string, voiceId: string): Promise<void> {
   const auth = await requireAuth()
-  setAgentVoice(auth.tenant.id, agentId, voiceId || null)
+  await setAgentVoice(auth.tenant.id, agentId, voiceId || null)
   revalidatePath('/voices')
   revalidatePath(`/agents/${agentId}`)
 }
@@ -208,7 +208,7 @@ export async function createSnippetAction(_prev: FormState, form: FormData): Pro
   const body = String(form.get('body') ?? '').trim()
   if (name.length < 2) return { error: 'Give the snippet a name.' }
   if (!body) return { error: 'A snippet with no text would add nothing to the prompt.' }
-  createSnippet(auth.tenant.id, {
+  await createSnippet(auth.tenant.id, {
     name,
     body,
     scopeAll: String(form.get('scopeAll') ?? '') === 'on',
@@ -223,7 +223,7 @@ export async function updateSnippetAction(_prev: FormState, form: FormData): Pro
   const snippetId = String(form.get('snippetId') ?? '')
   const body = String(form.get('body') ?? '').trim()
   if (!body) return { error: 'A snippet with no text would add nothing to the prompt.' }
-  updateSnippet(auth.tenant.id, snippetId, {
+  await updateSnippet(auth.tenant.id, snippetId, {
     name: String(form.get('name') ?? ''),
     body,
     scopeAll: String(form.get('scopeAll') ?? '') === 'on',
@@ -235,7 +235,7 @@ export async function updateSnippetAction(_prev: FormState, form: FormData): Pro
 
 export async function deleteSnippetAction(snippetId: string): Promise<void> {
   const auth = await requireAuth()
-  deleteSnippet(auth.tenant.id, snippetId)
+  await deleteSnippet(auth.tenant.id, snippetId)
   revalidatePath('/knowledge')
 }
 
@@ -245,7 +245,7 @@ export async function createToolAction(_prev: FormState, form: FormData): Promis
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(name)) {
     return { error: 'Use a lower-case function name, letters, digits and underscore.' }
   }
-  createTool(auth.tenant.id, {
+  await createTool(auth.tenant.id, {
     name,
     description: String(form.get('description') ?? ''),
     params: String(form.get('params') ?? ''),
@@ -256,7 +256,7 @@ export async function createToolAction(_prev: FormState, form: FormData): Promis
 
 export async function deleteToolAction(toolId: string): Promise<void> {
   const auth = await requireAuth()
-  deleteTool(auth.tenant.id, toolId)
+  await deleteTool(auth.tenant.id, toolId)
   revalidatePath('/knowledge')
 }
 
@@ -269,7 +269,7 @@ export async function createNumberIntentAction(
   const auth = await requireAuth()
   const name = String(form.get('name') ?? '').trim()
   if (name.length < 2) return { error: 'Name the line you mean to provision.' }
-  createNumberIntent(auth.tenant.id, {
+  await createNumberIntent(auth.tenant.id, {
     name,
     note: String(form.get('note') ?? ''),
     kind: String(form.get('kind') ?? 'did_inbound'),
@@ -282,7 +282,7 @@ export async function createNumberIntentAction(
 
 export async function deleteNumberIntentAction(intentId: string): Promise<void> {
   const auth = await requireAuth()
-  deleteNumberIntent(auth.tenant.id, intentId)
+  await deleteNumberIntent(auth.tenant.id, intentId)
   revalidatePath('/numbers')
 }
 
@@ -296,7 +296,7 @@ export async function createCaseAction(_prev: FormState, form: FormData): Promis
   if (name.length < 2) return { error: 'Give the case a name.' }
   if (!utterance) return { error: 'A case needs something for the caller to say.' }
   const maxMsRaw = String(form.get('maxMs') ?? '').trim()
-  const created = createCase(auth.tenant.id, {
+  const created = await createCase(auth.tenant.id, {
     agentId,
     name,
     utterance,
@@ -311,7 +311,7 @@ export async function createCaseAction(_prev: FormState, form: FormData): Promis
 
 export async function deleteCaseAction(caseId: string): Promise<void> {
   const auth = await requireAuth()
-  deleteCase(auth.tenant.id, caseId)
+  await deleteCase(auth.tenant.id, caseId)
   revalidatePath('/evals')
 }
 
@@ -329,7 +329,7 @@ export async function runSuiteAction(_prev: FormState, form: FormData): Promise<
 export async function savePolicyAction(_prev: FormState, form: FormData): Promise<FormState> {
   const auth = await requireAuth()
   const agentId = String(form.get('agentId') ?? '')
-  savePolicy(auth.tenant.id, agentId, {
+  await savePolicy(auth.tenant.id, agentId, {
     disclosure: String(form.get('disclosure') ?? ''),
     retentionDays: Number(form.get('retentionDays') ?? 30),
     redactPii: String(form.get('redactPii') ?? '') === 'on',
@@ -345,7 +345,7 @@ export async function savePolicyAction(_prev: FormState, form: FormData): Promis
  */
 export async function purgeExpiredAction(_prev: FormState): Promise<FormState> {
   const auth = await requireAuth()
-  const deleted = purgeExpiredCalls(auth.tenant.id)
+  const deleted = await purgeExpiredCalls(auth.tenant.id)
   revalidatePath('/compliance')
   revalidatePath('/calls')
   return { note: deleted === 0 ? 'Nothing was past its window.' : `Deleted ${deleted} call(s).` }

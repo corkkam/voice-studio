@@ -1,38 +1,37 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id, slugify } from '@/lib/db/ids'
 import { DEFAULT_PIPELINE, DEFAULT_PROMPT } from '@/lib/data/defaults'
 import type { Agent } from '@/lib/data/agents'
 import type { AgentRow, AgentStatus } from '@/lib/store/types'
 import { parsePipeline } from '@/lib/store/types'
 
-export function listAgents(tenantId: string): Agent[] {
-  return rows<AgentRow>(
-    getDb().prepare('SELECT * FROM agents WHERE tenant_id = ? ORDER BY created_at DESC').all(tenantId),
-  ).map(toAgent)
-}
-
-export function getAgentRow(tenantId: string, agentId: string): AgentRow | undefined {
-  return row<AgentRow>(
-    getDb().prepare('SELECT * FROM agents WHERE id = ? AND tenant_id = ?').get(agentId, tenantId),
+export async function listAgents(tenantId: string): Promise<Agent[]> {
+  const found = await all<AgentRow>(
+    'SELECT * FROM agents WHERE tenant_id = ? ORDER BY created_at DESC',
+    [tenantId],
   )
+  return Promise.all(found.map(toAgent))
 }
 
-export function getAgentById(agentId: string): AgentRow | undefined {
-  return row<AgentRow>(getDb().prepare('SELECT * FROM agents WHERE id = ?').get(agentId))
+export function getAgentRow(tenantId: string, agentId: string): Promise<AgentRow | undefined> {
+  return one<AgentRow>('SELECT * FROM agents WHERE id = ? AND tenant_id = ?', [agentId, tenantId])
 }
 
-export function createAgent(
+export function getAgentById(agentId: string): Promise<AgentRow | undefined> {
+  return one<AgentRow>('SELECT * FROM agents WHERE id = ?', [agentId])
+}
+
+export async function createAgent(
   tenantId: string,
   input: { name: string; locale?: string; summary?: string; prompt?: string },
-): AgentRow {
-  const db = getDb()
+): Promise<AgentRow> {
   const created = now()
   const base = slugify(input.name, 'agent')
   let slug = base
   let n = 1
-  while (db.prepare('SELECT 1 FROM agents WHERE tenant_id = ? AND slug = ?').get(tenantId, slug)) {
+  while (await one('SELECT 1 FROM agents WHERE tenant_id = ? AND slug = ?', [tenantId, slug])) {
     slug = `${base}-${++n}`
   }
   const row: AgentRow = {
@@ -58,47 +57,47 @@ export function createAgent(
     updated_at: created,
     published_at: null,
   }
-  db.prepare(
+  await run(
     `INSERT INTO agents (
       id, tenant_id, name, slug, locale, locale_tone, summary, status,
       pipeline_json, series, carrier, system_prompt, topology, voice_id, version,
       model_provider, model_name, model_credential_id,
       created_at, updated_at, published_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    row.id,
-    row.tenant_id,
-    row.name,
-    row.slug,
-    row.locale,
-    row.locale_tone,
-    row.summary,
-    row.status,
-    row.pipeline_json,
-    row.series,
-    row.carrier,
-    row.system_prompt,
-    row.topology,
-    row.voice_id,
-    row.version,
-    row.model_provider,
-    row.model_name,
-    row.model_credential_id,
-    row.created_at,
-    row.updated_at,
-    row.published_at,
+    [
+      row.id,
+      row.tenant_id,
+      row.name,
+      row.slug,
+      row.locale,
+      row.locale_tone,
+      row.summary,
+      row.status,
+      row.pipeline_json,
+      row.series,
+      row.carrier,
+      row.system_prompt,
+      row.topology,
+      row.voice_id,
+      row.version,
+      row.model_provider,
+      row.model_name,
+      row.model_credential_id,
+      row.created_at,
+      row.updated_at,
+      row.published_at,
+    ],
   )
   return row
 }
 
 /** Agents bound to a voice preset, so /voices can show what a preset drives. */
-export function countAgentsByVoice(tenantId: string): Record<string, number> {
-  const counts = getDb()
-    .prepare(
-      `SELECT voice_id, COUNT(*) AS n FROM agents
-       WHERE tenant_id = ? AND voice_id IS NOT NULL GROUP BY voice_id`,
-    )
-    .all(tenantId) as { voice_id: string; n: number }[]
+export async function countAgentsByVoice(tenantId: string): Promise<Record<string, number>> {
+  const counts = await all<{ voice_id: string; n: number }>(
+    `SELECT voice_id, COUNT(*) AS n FROM agents
+     WHERE tenant_id = ? AND voice_id IS NOT NULL GROUP BY voice_id`,
+    [tenantId],
+  )
   return Object.fromEntries(counts.map((c) => [c.voice_id, Number(c.n) || 0]))
 }
 
@@ -115,18 +114,17 @@ export interface AgentSummary {
  * and a version per agent and nothing else, so they take this instead of
  * listAgents, which runs a latency percentile per row.
  */
-export function listAgentSummaries(tenantId: string): AgentSummary[] {
-  const found = getDb()
-    .prepare(
-      'SELECT id, name, status, version, voice_id FROM agents WHERE tenant_id = ? ORDER BY created_at ASC',
-    )
-    .all(tenantId) as {
+export async function listAgentSummaries(tenantId: string): Promise<AgentSummary[]> {
+  const found = await all<{
     id: string
     name: string
     status: AgentStatus
     version: number
     voice_id: string | null
-  }[]
+  }>(
+    'SELECT id, name, status, version, voice_id FROM agents WHERE tenant_id = ? ORDER BY created_at ASC',
+    [tenantId],
+  )
   return found.map((agent) => ({
     id: agent.id,
     name: agent.name,
@@ -136,13 +134,20 @@ export function listAgentSummaries(tenantId: string): AgentSummary[] {
   }))
 }
 
-export function setAgentVoice(tenantId: string, agentId: string, voiceId: string | null): void {
-  getDb()
-    .prepare('UPDATE agents SET voice_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?')
-    .run(voiceId, now(), agentId, tenantId)
+export async function setAgentVoice(
+  tenantId: string,
+  agentId: string,
+  voiceId: string | null,
+): Promise<void> {
+  await run('UPDATE agents SET voice_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?', [
+    voiceId,
+    now(),
+    agentId,
+    tenantId,
+  ])
 }
 
-export function updateAgent(
+export async function updateAgent(
   tenantId: string,
   agentId: string,
   patch: Partial<
@@ -158,8 +163,8 @@ export function updateAgent(
       | 'model_credential_id'
     >
   >,
-): AgentRow | undefined {
-  const existing = getAgentRow(tenantId, agentId)
+): Promise<AgentRow | undefined> {
+  const existing = await getAgentRow(tenantId, agentId)
   if (!existing) return undefined
   const next = {
     name: patch.name?.trim() || existing.name,
@@ -178,14 +183,12 @@ export function updateAgent(
       patch.status === 'live' && existing.status !== 'live' ? now() : existing.published_at,
     version: patch.status === 'live' && existing.status !== 'live' ? existing.version + 1 : existing.version,
   }
-  getDb()
-    .prepare(
-      `UPDATE agents SET name = ?, summary = ?, locale = ?, system_prompt = ?,
-       status = ?, model_provider = ?, model_name = ?, model_credential_id = ?,
-       updated_at = ?, published_at = ?, version = ?
-       WHERE id = ? AND tenant_id = ?`,
-    )
-    .run(
+  await run(
+    `UPDATE agents SET name = ?, summary = ?, locale = ?, system_prompt = ?,
+     status = ?, model_provider = ?, model_name = ?, model_credential_id = ?,
+     updated_at = ?, published_at = ?, version = ?
+     WHERE id = ? AND tenant_id = ?`,
+    [
       next.name,
       next.summary,
       next.locale,
@@ -199,13 +202,14 @@ export function updateAgent(
       next.version,
       agentId,
       tenantId,
-    )
+    ],
+  )
   return getAgentRow(tenantId, agentId)
 }
 
-export function toAgent(row: AgentRow): Agent {
+export async function toAgent(row: AgentRow): Promise<Agent> {
   const pipeline = parsePipeline(row.pipeline_json)
-  const stats = agentStats(row.tenant_id, row.id)
+  const stats = await agentStats(row.tenant_id, row.id)
   return {
     id: row.id,
     name: row.name,
@@ -228,25 +232,25 @@ export function toAgent(row: AgentRow): Agent {
   }
 }
 
-function agentStats(tenantId: string, agentId: string): { p95: number | null; calls7d: number } {
-  const db = getDb()
+async function agentStats(
+  tenantId: string,
+  agentId: string,
+): Promise<{ p95: number | null; calls7d: number }> {
   const weekAgo = now() - 7 * 24 * 60 * 60 * 1000
-  const countRow = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM calls
-       WHERE tenant_id = ? AND agent_id = ? AND started_at >= ?`,
-    )
-    .get(tenantId, agentId, weekAgo) as { n: number }
-  const samples = db
-    .prepare(
-      `SELECT t.v2v_ms AS v2v FROM call_turns t
-       JOIN calls c ON c.id = t.call_id
-       WHERE c.tenant_id = ? AND c.agent_id = ? AND t.v2v_ms IS NOT NULL
-       ORDER BY t.v2v_ms`,
-    )
-    .all(tenantId, agentId) as { v2v: number }[]
+  const countRow = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM calls
+     WHERE tenant_id = ? AND agent_id = ? AND started_at >= ?`,
+    [tenantId, agentId, weekAgo],
+  )
+  const samples = await all<{ v2v: number }>(
+    `SELECT t.v2v_ms AS v2v FROM call_turns t
+     JOIN calls c ON c.id = t.call_id
+     WHERE c.tenant_id = ? AND c.agent_id = ? AND t.v2v_ms IS NOT NULL
+     ORDER BY t.v2v_ms`,
+    [tenantId, agentId],
+  )
   return {
-    calls7d: Number(countRow.n) || 0,
+    calls7d: Number(countRow?.n) || 0,
     p95: percentile(samples.map((s) => s.v2v), 0.95),
   }
 }

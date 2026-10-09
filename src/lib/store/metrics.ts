@@ -1,31 +1,30 @@
 import 'server-only'
 
-import { getDb, now } from '@/lib/db'
+import { all, now, one } from '@/lib/db'
 import type { StudioMetric } from '@/lib/data/agents'
 import { countLive } from '@/lib/store/calls'
 
-export function studioMetrics(tenantId: string): StudioMetric[] {
-  const db = getDb()
+export async function studioMetrics(tenantId: string): Promise<StudioMetric[]> {
   const start = startOfMonth()
-  const minutesRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(
-         CASE WHEN ended_at IS NOT NULL THEN ended_at - started_at
-              ELSE ? - started_at END
-       ), 0) AS ms
-       FROM calls WHERE tenant_id = ? AND started_at >= ?`,
-    )
-    .get(now(), tenantId, start) as { ms: number }
-  const minutes = Math.round(Number(minutesRow.ms) / 60000)
+  // SUM over BIGINT returns numeric, which arrives as a string, so the total is
+  // cast back to an integer millisecond count in SQL rather than in JS.
+  const minutesRow = await one<{ ms: number }>(
+    `SELECT COALESCE(SUM(
+       CASE WHEN ended_at IS NOT NULL THEN ended_at - started_at
+            ELSE ?::bigint - started_at END
+     ), 0)::bigint AS ms
+     FROM calls WHERE tenant_id = ? AND started_at >= ?`,
+    [now(), tenantId, start],
+  )
+  const minutes = Math.round(Number(minutesRow?.ms ?? 0) / 60000)
 
-  const samples = db
-    .prepare(
-      `SELECT t.v2v_ms AS v2v FROM call_turns t
-       JOIN calls c ON c.id = t.call_id
-       WHERE c.tenant_id = ? AND t.v2v_ms IS NOT NULL
-       ORDER BY t.v2v_ms`,
-    )
-    .all(tenantId) as { v2v: number }[]
+  const samples = await all<{ v2v: number }>(
+    `SELECT t.v2v_ms AS v2v FROM call_turns t
+     JOIN calls c ON c.id = t.call_id
+     WHERE c.tenant_id = ? AND t.v2v_ms IS NOT NULL
+     ORDER BY t.v2v_ms`,
+    [tenantId],
+  )
   const p95 = samples.length ? samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.95))].v2v : null
 
   return [
@@ -49,15 +48,16 @@ export function studioMetrics(tenantId: string): StudioMetric[] {
 }
 
 /** Lifetime call count per agent, for the compliance table. */
-export function countCallsByAgent(tenantId: string): Record<string, number> {
-  const found = getDb()
-    .prepare('SELECT agent_id, COUNT(*) AS n FROM calls WHERE tenant_id = ? GROUP BY agent_id')
-    .all(tenantId) as { agent_id: string; n: number }[]
+export async function countCallsByAgent(tenantId: string): Promise<Record<string, number>> {
+  const found = await all<{ agent_id: string; n: number }>(
+    'SELECT agent_id, COUNT(*) AS n FROM calls WHERE tenant_id = ? GROUP BY agent_id',
+    [tenantId],
+  )
   return Object.fromEntries(found.map((item) => [item.agent_id, Number(item.n) || 0]))
 }
 
-export function mediaPlane(tenantId: string) {
-  const live = countLive(tenantId)
+export async function mediaPlane(tenantId: string) {
+  const live = await countLive(tenantId)
   return {
     region: 'Client SDK plane',
     health: 'healthy' as const,
