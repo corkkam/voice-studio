@@ -8,30 +8,27 @@
  *   1. The demo operator is a real Clerk user, created over the Clerk Backend
  *      API, so the printed login works in a browser. Clerk owns the credential;
  *      this script only mirrors the id into the users table.
- *   2. Tenant, user, agent and API keys go straight into the SQLite file. There
- *      is no HTTP route that creates a tenant, and sign-up provisions one only
- *      when a human first signs in.
+ *   2. Tenant, user, agent and API keys go straight into Postgres. There is no
+ *      HTTP route that creates a tenant, and sign-up provisions one only when a
+ *      human first signs in.
  *   3. Calls are driven over /api/v1 with the seeded secret key, so the live
  *      monitor, the SSE hub and the turn store all see real traffic rather than
  *      hand-written rows.
  *
- * The schema is created by the app (`bootstrap()` in src/lib/db/index.ts), never
- * here. If the DB file is missing, one unauthorised API request is enough to make
- * the server open the connection and create the tables.
+ * The schema belongs to `pnpm db:push`, never to this script and no longer to
+ * the app. Run that once against a fresh database before seeding.
  *
  * Usage: pnpm seed            (3 calls, keeps 2 live)
  *        SEED_CALLS=0 pnpm seed
  *        STUDIO_BASE_URL=http://localhost:3001 pnpm seed
  */
 
-import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { neon } from '@neondatabase/serverless'
 import { clerkUserByEmail, createClerkUser } from './clerk.mjs'
 
 const BASE = process.env.STUDIO_BASE_URL || 'http://localhost:3000'
-const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'voice-studio.db')
+const DATABASE_URL = process.env.DATABASE_URL
 const CALLS = Number(process.env.SEED_CALLS ?? 3)
 
 const DEMO = {
@@ -56,9 +53,6 @@ const token = (bytes = 32) => randomBytes(bytes).toString('base64url')
 
 async function serverUp() {
   try {
-    // A rejected key still reaches the key lookup, which opens the database and
-    // creates the schema. A request with no Authorization header is refused
-    // before any query runs, so it would never bootstrap anything.
     const res = await fetch(`${BASE}/api/v1/sessions`, {
       method: 'POST',
       headers: { Authorization: 'Bearer vs_sk_live_seed_bootstrap_probe' },
@@ -69,28 +63,16 @@ async function serverUp() {
   }
 }
 
-function migrated() {
-  if (!existsSync(DB_PATH)) return false
-  const db = new DatabaseSync(DB_PATH)
-  const columns = db.prepare('PRAGMA table_info(users)').all()
-  db.close()
-  return columns.some((column) => column.name === 'clerk_user_id')
-}
-
-/*
- * The app owns the schema, this script never writes DDL. A database created
- * before Clerk landed still has the old users table, and its migration also
- * runs inside bootstrap(), so one request to the server is what brings both a
- * missing and a stale database up to date.
- */
-async function ensureDb() {
-  if (migrated()) return true
-  const up = await serverUp()
-  if (up && migrated()) return true
-  console.error(
-    `No usable database at ${DB_PATH}.\n` +
-      `Start the app once so it creates and migrates the schema: pnpm dev, then re-run pnpm seed.`,
+/* The tables come from `pnpm db:push`. Seeding an empty database would fail one
+ * statement at a time, so it is checked up front and named as one instruction. */
+async function ensureSchema(sql) {
+  const [{ ready }] = await sql.query(
+    `SELECT COUNT(*) = 4 AS ready FROM information_schema.tables
+     WHERE table_schema = 'public'
+       AND table_name IN ('users', 'tenants', 'agents', 'api_keys')`,
   )
+  if (ready) return true
+  console.error('The database has no schema yet. Create it with: pnpm db:push')
   return false
 }
 
@@ -112,13 +94,14 @@ async function ensureClerkUser() {
   return { clerkUserId: user.id, created: true }
 }
 
-function ensureTenant(db, clerkUserId) {
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO.email)
+async function ensureTenant(sql, clerkUserId) {
+  const [existing] = await sql.query('SELECT id FROM users WHERE email = $1', [DEMO.email])
   if (existing) {
-    db.prepare('UPDATE users SET clerk_user_id = ? WHERE id = ?').run(clerkUserId, existing.id)
-    const member = db
-      .prepare('SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1')
-      .get(existing.id)
+    await sql.query('UPDATE users SET clerk_user_id = $1 WHERE id = $2', [clerkUserId, existing.id])
+    const [member] = await sql.query(
+      'SELECT tenant_id FROM tenant_members WHERE user_id = $1 LIMIT 1',
+      [existing.id],
+    )
     return { userId: existing.id, tenantId: member.tenant_id, created: false }
   }
 
@@ -127,32 +110,38 @@ function ensureTenant(db, clerkUserId) {
   const tenantId = id('ten')
   let slug = 'demo-workspace'
   let n = 1
-  while (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) slug = `demo-workspace-${++n}`
+  while ((await sql.query('SELECT 1 FROM tenants WHERE slug = $1', [slug])).length) {
+    slug = `demo-workspace-${++n}`
+  }
 
-  db.prepare(
-    'INSERT INTO users (id, clerk_user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(userId, clerkUserId, DEMO.email, DEMO.name, created)
-  db.prepare(
+  await sql.query(
+    'INSERT INTO users (id, clerk_user_id, email, name, created_at) VALUES ($1, $2, $3, $4, $5)',
+    [userId, clerkUserId, DEMO.email, DEMO.name, created],
+  )
+  await sql.query(
     `INSERT INTO tenants (id, name, slug, region, owner_id, created_at)
-     VALUES (?, ?, ?, 'IN-SOUTH', ?, ?)`,
-  ).run(tenantId, DEMO.workspace, slug, userId, created)
-  db.prepare(
-    "INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (?, ?, 'owner')",
-  ).run(tenantId, userId)
+     VALUES ($1, $2, $3, 'IN-SOUTH', $4, $5)`,
+    [tenantId, DEMO.workspace, slug, userId, created],
+  )
+  await sql.query(
+    "INSERT INTO tenant_members (tenant_id, user_id, role) VALUES ($1, $2, 'owner')",
+    [tenantId, userId],
+  )
 
   return { userId, tenantId, created: true }
 }
 
-function ensureAgent(db, tenantId) {
-  const existing = db
-    .prepare('SELECT id, status FROM agents WHERE tenant_id = ? AND name = ?')
-    .get(tenantId, DEMO.agent)
+async function ensureAgent(sql, tenantId) {
+  const [existing] = await sql.query(
+    'SELECT id, status FROM agents WHERE tenant_id = $1 AND name = $2',
+    [tenantId, DEMO.agent],
+  )
   if (existing) {
     if (existing.status !== 'live') {
-      db.prepare("UPDATE agents SET status = 'live', published_at = ? WHERE id = ?").run(
+      await sql.query("UPDATE agents SET status = 'live', published_at = $1 WHERE id = $2", [
         Date.now(),
         existing.id,
-      )
+      ])
     }
     return { agentId: existing.id, created: false }
   }
@@ -170,43 +159,48 @@ function ensureAgent(db, tenantId) {
     { key: 'transport', step: '5 * TRANSPORT', model: 'REST + SSE', detail: 'seeded', hosting: 'licensed later', hostingTone: 'muted', latencyMs: 31, cost: 'session', budgetColor: '#b8afa4', budgetLabel: 'playback 31' },
   ])
 
-  db.prepare(
+  await sql.query(
     `INSERT INTO agents (
       id, tenant_id, name, slug, locale, locale_tone, summary, status,
       pipeline_json, series, carrier, system_prompt, topology, version,
       created_at, updated_at, published_at
-    ) VALUES (?, ?, ?, ?, 'en', 'neutral', ?, 'live', ?, 'Web / SDK', 'Web + macOS', ?, 'cascaded', 1, ?, ?, ?)`,
-  ).run(
-    agentId,
-    tenantId,
-    DEMO.agent,
-    'support-concierge',
-    'Seeded agent for local development',
-    pipeline,
-    'You are a concise support voice agent. Ask one question at a time.',
-    created,
-    created,
-    created,
+    ) VALUES ($1, $2, $3, $4, 'en', 'neutral', $5, 'live', $6, 'Web / SDK', 'Web + macOS', $7, 'cascaded', 1, $8, $9, $10)`,
+    [
+      agentId,
+      tenantId,
+      DEMO.agent,
+      'support-concierge',
+      'Seeded agent for local development',
+      pipeline,
+      'You are a concise support voice agent. Ask one question at a time.',
+      created,
+      created,
+      created,
+    ],
   )
   return { agentId, created: true }
 }
 
-function rotateKeys(db, tenantId) {
+async function rotateKeys(sql, tenantId) {
   // A key hash is one-way, so a re-run cannot print an existing secret. Drop the
   // seeded pair and mint a fresh one instead of piling up dead keys.
-  db.prepare("DELETE FROM api_keys WHERE tenant_id = ? AND name LIKE 'Seed %'").run(tenantId)
+  await sql.query("DELETE FROM api_keys WHERE tenant_id = $1 AND name LIKE 'Seed %'", [tenantId])
 
-  const mint = (kind, name) => {
+  const mint = async (kind, name) => {
     const secret = `vs_${kind === 'publishable' ? 'pk' : 'sk'}_live_${token(24)}`
-    db.prepare(
+    await sql.query(
       `INSERT INTO api_keys (
         id, tenant_id, name, prefix, key_hash, kind, origins_json, last_used_at, created_at, revoked_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL)`,
-    ).run(id('key'), tenantId, name, secret.slice(0, 16), sha256(secret), kind, Date.now())
+      ) VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, $7, NULL)`,
+      [id('key'), tenantId, name, secret.slice(0, 16), sha256(secret), kind, Date.now()],
+    )
     return secret
   }
 
-  return { secret: mint('secret', 'Seed secret'), publishable: mint('publishable', 'Seed publishable') }
+  return {
+    secret: await mint('secret', 'Seed secret'),
+    publishable: await mint('publishable', 'Seed publishable'),
+  }
 }
 
 async function driveCalls(agentId, secretKey) {
@@ -253,18 +247,18 @@ async function driveCalls(agentId, secretKey) {
 }
 
 async function main() {
-  if (!(await ensureDb())) process.exit(1)
+  if (!DATABASE_URL) {
+    console.error('DATABASE_URL is not set. Pull it with: vercel env pull .env.local')
+    process.exit(1)
+  }
+  const sql = neon(DATABASE_URL)
+  if (!(await ensureSchema(sql))) process.exit(1)
 
   const clerkUser = await ensureClerkUser()
 
-  const db = new DatabaseSync(DB_PATH)
-  db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA foreign_keys = ON')
-
-  const tenant = ensureTenant(db, clerkUser.clerkUserId)
-  const agent = ensureAgent(db, tenant.tenantId)
-  const keys = rotateKeys(db, tenant.tenantId)
-  db.close()
+  const tenant = await ensureTenant(sql, clerkUser.clerkUserId)
+  const agent = await ensureAgent(sql, tenant.tenantId)
+  const keys = await rotateKeys(sql, tenant.tenantId)
 
   console.log(`Workspace  ${tenant.tenantId} ${tenant.created ? '(created)' : '(existing)'}`)
   console.log(

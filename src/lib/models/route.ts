@@ -33,7 +33,7 @@ export function resolveModelRoute(input: {
   agent: AgentRow
   call?: CallRow
   override?: ModelRef
-}): ModelRoute {
+}): Promise<ModelRoute> {
   const { tenantId, agent, call, override } = input
 
   if (override) return byoRoute(tenantId, override, 'request')
@@ -51,24 +51,28 @@ export function resolveModelRoute(input: {
       'agent',
     )
   }
-  return platformRoute()
+  return Promise.resolve(platformRoute())
 }
 
 /**
  * Checks a reference without spending a turn on it. Session open and agent save both
  * call this, so a bad choice fails at configuration time rather than mid-call.
  */
-export function assertRoutable(tenantId: string, ref: ModelRef): void {
-  byoRoute(tenantId, ref, 'request')
+export async function assertRoutable(tenantId: string, ref: ModelRef): Promise<void> {
+  await byoRoute(tenantId, ref, 'request')
 }
 
-function byoRoute(tenantId: string, ref: ModelRef, source: ModelSource): ModelRoute {
+async function byoRoute(
+  tenantId: string,
+  ref: ModelRef,
+  source: ModelSource,
+): Promise<ModelRoute> {
   const provider = getProvider(ref.provider)
   if (!provider) throw new ModelRouteError('Unknown model provider.')
 
   const credential = ref.credentialId
-    ? getCredential(tenantId, ref.credentialId)
-    : findCredential(tenantId, provider.id)
+    ? await getCredential(tenantId, ref.credentialId)
+    : await findCredential(tenantId, provider.id)
 
   if (!credential || credential.revoked_at) {
     // A platform-funded provider still works without a tenant key of its own.
@@ -87,7 +91,7 @@ function byoRoute(tenantId: string, ref: ModelRef, source: ModelSource): ModelRo
     throw new ModelRouteError('No live key for that model provider. Add one under Keys.')
   }
 
-  const secret = useCredentialSecret(tenantId, credential.id)
+  const secret = await useCredentialSecret(tenantId, credential.id)
   if (!secret) throw new ModelRouteError('No live key for that model provider. Add one under Keys.')
 
   return {

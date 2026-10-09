@@ -2,7 +2,7 @@ import 'server-only'
 
 import { auth, currentUser } from '@clerk/nextjs/server'
 import { redirect } from 'next/navigation'
-import { getDb, now } from '@/lib/db'
+import { now, one, run } from '@/lib/db'
 import { id } from '@/lib/db/ids'
 import type { UserRow } from '@/lib/store/types'
 
@@ -39,7 +39,7 @@ export async function getAuth(): Promise<AuthContext | null> {
   const { userId } = await auth()
   if (!userId) return null
 
-  const existing = read(userId)
+  const existing = await read(userId)
   if (existing) return existing
 
   await provision(userId)
@@ -52,8 +52,8 @@ export async function requireAuth(): Promise<AuthContext> {
   return context
 }
 
-function read(clerkUserId: string): AuthContext | null {
-  const row = getDb().prepare(WORKSPACE_SQL).get(clerkUserId) as WorkspaceRow | undefined
+async function read(clerkUserId: string): Promise<AuthContext | null> {
+  const row = await one<WorkspaceRow>(WORKSPACE_SQL, [clerkUserId])
   if (!row) return null
   return {
     user: { id: row.user_id, email: row.email, name: row.name },
@@ -75,34 +75,32 @@ async function provision(clerkUserId: string): Promise<void> {
   if (!email) return
   const name = displayName(clerkUser, email)
 
-  const db = getDb()
-  const claimed = db
-    .prepare('SELECT * FROM users WHERE email = ?')
-    .get(email) as UserRow | undefined
+  const claimed = await one<UserRow>('SELECT * FROM users WHERE email = ?', [email])
 
   if (claimed?.clerk_user_id && claimed.clerk_user_id !== clerkUserId) return
 
   const userId = claimed?.id ?? id('usr')
   if (claimed) {
-    db.prepare('UPDATE users SET clerk_user_id = ?, name = ? WHERE id = ?').run(
+    await run('UPDATE users SET clerk_user_id = ?, name = ? WHERE id = ?', [
       clerkUserId,
       name,
       userId,
-    )
+    ])
   } else {
-    db.prepare(
-      'INSERT INTO users (id, clerk_user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).run(userId, clerkUserId, email, name, now())
+    await run('INSERT INTO users (id, clerk_user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?)', [
+      userId,
+      clerkUserId,
+      email,
+      name,
+      now(),
+    ])
   }
 
-  const member = db
-    .prepare('SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1')
-    .get(userId)
-  if (!member) createTenant(userId, name)
+  const member = await one('SELECT tenant_id FROM tenant_members WHERE user_id = ? LIMIT 1', [userId])
+  if (!member) await createTenant(userId, name)
 }
 
-function createTenant(userId: string, name: string): void {
-  const db = getDb()
+async function createTenant(userId: string, name: string): Promise<void> {
   const created = now()
   const tenantId = id('ten')
   const tenantName = `${name.split(' ')[0]}'s Workspace`
@@ -114,16 +112,17 @@ function createTenant(userId: string, name: string): void {
       .slice(0, 40) || 'workspace'
   let slug = base
   let n = 1
-  while (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) slug = `${base}-${++n}`
+  while (await one('SELECT 1 FROM tenants WHERE slug = ?', [slug])) slug = `${base}-${++n}`
 
-  db.prepare(
+  await run(
     `INSERT INTO tenants (id, name, slug, region, owner_id, created_at)
      VALUES (?, ?, ?, 'IN-SOUTH', ?, ?)`,
-  ).run(tenantId, tenantName, slug, userId, created)
-  db.prepare("INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (?, ?, 'owner')").run(
+    [tenantId, tenantName, slug, userId, created],
+  )
+  await run("INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (?, ?, 'owner')", [
     tenantId,
     userId,
-  )
+  ])
 }
 
 type ClerkUser = NonNullable<Awaited<ReturnType<typeof currentUser>>>

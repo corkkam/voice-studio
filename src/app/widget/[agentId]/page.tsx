@@ -10,7 +10,7 @@ export default async function WidgetPage({
   params: Promise<{ agentId: string }>
 }) {
   const { agentId } = await params
-  const agent = getAgentById(agentId)
+  const agent = await getAgentById(agentId)
   if (!agent) notFound()
 
   return (

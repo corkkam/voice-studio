@@ -15,7 +15,7 @@ export function OPTIONS(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const key = requireApiKey(req)
+  const key = await requireApiKey(req)
   if (!key) return apiError('Unauthorized', 401)
 
   const body = await readJson<{
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
   }>(req)
 
   if (!body.agentId) return apiError('agentId is required')
-  const agent = getAgentRow(key.tenant_id, body.agentId)
+  const agent = await getAgentRow(key.tenant_id, body.agentId)
   if (!agent) return apiError('Agent not found', 404)
   if (agent.status !== 'live' && key.kind === 'publishable') {
     return apiError('Agent is not published', 409)
@@ -52,14 +52,14 @@ export async function POST(req: Request) {
     if (!model) return apiError('model must be "provider/model" or { provider, model }')
     // Fail here rather than on the first turn, when a caller is already speaking.
     try {
-      assertRoutable(key.tenant_id, model)
+      await assertRoutable(key.tenant_id, model)
     } catch (error) {
       if (error instanceof ModelRouteError) return apiError(error.message, 422)
       throw error
     }
   }
 
-  const { call, sessionToken } = createCall({
+  const { call, sessionToken } = await createCall({
     tenantId: key.tenant_id,
     agentId: agent.id,
     channel,
@@ -71,8 +71,8 @@ export async function POST(req: Request) {
 
   // Additive fields only. Three SDKs and the widget ship against this shape, so
   // `voice` and `disclosure` are new keys an old client simply ignores.
-  const voice = resolveVoice(key.tenant_id, agent.voice_id)
-  const policy = policyOrEmpty(key.tenant_id, agent.id)
+  const voice = await resolveVoice(key.tenant_id, agent.voice_id)
+  const policy = await policyOrEmpty(key.tenant_id, agent.id)
 
   const base = publicBaseUrl(req)
   return json(

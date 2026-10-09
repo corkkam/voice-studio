@@ -8,8 +8,8 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ sessionId: 
   const auth = await getAuth()
   if (!auth) return apiError('Unauthorized', 401)
   const { sessionId } = await ctx.params
-  const call = getCall(auth.tenant.id, sessionId)
+  const call = await getCall(auth.tenant.id, sessionId)
   if (!call) return apiError('Session not found', 404)
-  const ended = endCall(call)
+  const ended = await endCall(call)
   return json({ id: ended.id, status: ended.status })
 }

@@ -18,16 +18,17 @@ export default async function CampaignPage({
 }) {
   const auth = await requireAuth()
   const { campaignId } = await params
-  const campaign = getCampaign(auth.tenant.id, campaignId)
+  const campaign = await getCampaign(auth.tenant.id, campaignId)
   if (!campaign) notFound()
-  const agent = campaign.agent_id ? getAgentRow(auth.tenant.id, campaign.agent_id) : undefined
-  const live = countLive(auth.tenant.id)
-  const policy = agent ? policyOrEmpty(auth.tenant.id, agent.id) : undefined
+  const agent = campaign.agent_id ? await getAgentRow(auth.tenant.id, campaign.agent_id) : undefined
+  const live = await countLive(auth.tenant.id)
+  const policy = agent ? await policyOrEmpty(auth.tenant.id, agent.id) : undefined
+  const intents = await listNumberIntents(auth.tenant.id)
   const gate = campaignGate({
     agentName: agent?.name ?? null,
     disclosure: policy?.disclosure ?? '',
     retentionDays: policy?.retention_days ?? 30,
-    numberIntents: listNumberIntents(auth.tenant.id).length,
+    numberIntents: intents.length,
   })
 
   return (

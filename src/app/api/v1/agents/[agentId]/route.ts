@@ -12,10 +12,10 @@ export function OPTIONS(req: Request) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ agentId: string }> }) {
-  const key = requireApiKey(req)
+  const key = await requireApiKey(req)
   if (!key) return apiError('Unauthorized', 401, corsHeaders(req))
   const { agentId } = await ctx.params
-  const agent = getAgentRow(key.tenant_id, agentId)
+  const agent = await getAgentRow(key.tenant_id, agentId)
   if (!agent) return apiError('Agent not found', 404, corsHeaders(req))
   return json(
     {
@@ -36,10 +36,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ agentId: string
 
 /** Changes the agent's default model, so every session opened after this starts on it. */
 export async function PATCH(req: Request, ctx: { params: Promise<{ agentId: string }> }) {
-  const key = requireSecretKey(req)
+  const key = await requireSecretKey(req)
   if (!key) return apiError('A secret key is required.', 401, corsHeaders(req))
   const { agentId } = await ctx.params
-  const agent = getAgentRow(key.tenant_id, agentId)
+  const agent = await getAgentRow(key.tenant_id, agentId)
   if (!agent) return apiError('Agent not found', 404, corsHeaders(req))
 
   const body = await readJson<{ model?: unknown }>(req)
@@ -47,7 +47,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ agentId: stri
 
   // null clears the choice and puts the agent back on the platform model.
   if (body.model === null) {
-    updateAgent(key.tenant_id, agentId, {
+    await updateAgent(key.tenant_id, agentId, {
       model_provider: '',
       model_name: '',
       model_credential_id: null,
@@ -58,12 +58,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ agentId: stri
   const ref = parseModelRef(body.model)
   if (!ref) return apiError('model must be "provider/model" or { provider, model }', 400, corsHeaders(req))
   try {
-    assertRoutable(key.tenant_id, ref)
+    await assertRoutable(key.tenant_id, ref)
   } catch (error) {
     if (error instanceof ModelRouteError) return apiError(error.message, 422, corsHeaders(req))
     throw error
   }
-  updateAgent(key.tenant_id, agentId, {
+  await updateAgent(key.tenant_id, agentId, {
     model_provider: ref.provider,
     model_name: ref.model,
     model_credential_id: ref.credentialId ?? null,

@@ -27,18 +27,18 @@ export async function completeTurn(
   override?: ModelRef,
 ): Promise<CompleteResult> {
   const started = Date.now()
-  setCallActivity(call, 'thinking', 'generating reply')
-  appendTurn(call, { speaker: 'CALLER', text: userText, activity: 'thinking', activityDetail: 'generating reply' })
+  await setCallActivity(call, 'thinking', 'generating reply')
+  await appendTurn(call, { speaker: 'CALLER', text: userText, activity: 'thinking', activityDetail: 'generating reply' })
 
-  const agent = getAgentById(call.agent_id)
-  const history = listTurns(call.id)
+  const agent = await getAgentById(call.agent_id)
+  const history = await listTurns(call.id)
   const messages = history.map((turn) => ({
     role: turn.speaker === 'AGENT' ? 'assistant' : 'user',
     content: turn.text,
   }))
   // Grounding text and tool declarations are composed in one place so the
   // /knowledge screen and the runtime can never disagree.
-  const resolved = resolveSystemPrompt(
+  const resolved = await resolveSystemPrompt(
     call.tenant_id,
     call.agent_id,
     agent?.system_prompt || BASE_PROMPT,
@@ -48,7 +48,7 @@ export async function completeTurn(
   if (agent) {
     const chosen = Boolean(override || (call.model_provider && call.model_name) || agent.model_provider)
     try {
-      route = resolveModelRoute({ tenantId: call.tenant_id, agent, call, override })
+      route = await resolveModelRoute({ tenantId: call.tenant_id, agent, call, override })
     } catch (error) {
       // A tenant that picked a model must see why it did not run. A tenant that
       // picked nothing gets the fallback line instead of a failed call.
@@ -63,7 +63,7 @@ export async function completeTurn(
 
   const llmMs = Date.now() - started
   const tool = detectTool(result.text, resolved.toolNames)
-  appendTurn(call, {
+  await appendTurn(call, {
     speaker: 'AGENT',
     text: result.text,
     tool,
@@ -110,7 +110,7 @@ export async function replyForEval(input: {
   const messages = [{ role: 'user', content: input.utterance }]
   let route: ModelRoute | undefined
   try {
-    route = resolveModelRoute({ tenantId: input.tenantId, agent: input.agent })
+    route = await resolveModelRoute({ tenantId: input.tenantId, agent: input.agent })
   } catch (error) {
     if (!(error instanceof ModelRouteError)) throw error
   }

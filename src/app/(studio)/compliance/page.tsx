@@ -25,11 +25,11 @@ const INTENT_ONLY = [
 
 export default async function CompliancePage() {
   const auth = await requireAuth()
-  const agents = listAgentSummaries(auth.tenant.id)
-  const policies = listPolicies(auth.tenant.id)
+  const agents = await listAgentSummaries(auth.tenant.id)
+  const policies = await listPolicies(auth.tenant.id)
   const byAgent = new Map(policies.map((policy) => [policy.agent_id, policy]))
-  const calls = countCallsByAgent(auth.tenant.id)
-  const retention = retentionState(auth.tenant.id)
+  const calls = await countCallsByAgent(auth.tenant.id)
+  const retention = await retentionState(auth.tenant.id)
   const gaps = agents.filter(
     (agent) => agent.status === 'live' && !byAgent.get(agent.id)?.disclosure,
   ).length

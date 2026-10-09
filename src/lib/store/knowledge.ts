@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id } from '@/lib/db/ids'
 import type { KnowledgeSnippetRow, ToolRow } from '@/lib/store/types'
 
@@ -16,39 +16,39 @@ export interface SnippetWithScope extends KnowledgeSnippetRow {
   agentIds: string[]
 }
 
-export function listSnippets(tenantId: string): SnippetWithScope[] {
-  const db = getDb()
-  const snippets = rows<KnowledgeSnippetRow>(
-    db
-      .prepare('SELECT * FROM knowledge_snippets WHERE tenant_id = ? ORDER BY created_at ASC')
-      .all(tenantId),
-  )
-  const scopes = db
-    .prepare(
+export async function listSnippets(tenantId: string): Promise<SnippetWithScope[]> {
+  const [snippets, scopes] = await Promise.all([
+    all<KnowledgeSnippetRow>(
+      'SELECT * FROM knowledge_snippets WHERE tenant_id = ? ORDER BY created_at ASC',
+      [tenantId],
+    ),
+    all<{ snippet_id: string; agent_id: string }>(
       `SELECT s.snippet_id, s.agent_id FROM knowledge_scopes s
        JOIN knowledge_snippets k ON k.id = s.snippet_id
        WHERE k.tenant_id = ?`,
-    )
-    .all(tenantId) as { snippet_id: string; agent_id: string }[]
+      [tenantId],
+    ),
+  ])
   return snippets.map((snippet) => ({
     ...snippet,
     agentIds: scopes.filter((s) => s.snippet_id === snippet.id).map((s) => s.agent_id),
   }))
 }
 
-export function getSnippet(tenantId: string, snippetId: string): KnowledgeSnippetRow | undefined {
-  return row<KnowledgeSnippetRow>(
-    getDb()
-      .prepare('SELECT * FROM knowledge_snippets WHERE id = ? AND tenant_id = ?')
-      .get(snippetId, tenantId),
-  )
+export function getSnippet(
+  tenantId: string,
+  snippetId: string,
+): Promise<KnowledgeSnippetRow | undefined> {
+  return one<KnowledgeSnippetRow>('SELECT * FROM knowledge_snippets WHERE id = ? AND tenant_id = ?', [
+    snippetId,
+    tenantId,
+  ])
 }
 
-export function createSnippet(
+export async function createSnippet(
   tenantId: string,
   input: { name: string; body: string; scopeAll?: boolean; agentIds?: string[] },
-): KnowledgeSnippetRow {
-  const db = getDb()
+): Promise<KnowledgeSnippetRow> {
   const created = now()
   const snippet: KnowledgeSnippetRow = {
     id: id('kns'),
@@ -59,77 +59,78 @@ export function createSnippet(
     created_at: created,
     updated_at: created,
   }
-  db.prepare(
+  await run(
     `INSERT INTO knowledge_snippets (id, tenant_id, name, body, scope_all, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    snippet.id,
-    snippet.tenant_id,
-    snippet.name,
-    snippet.body,
-    snippet.scope_all,
-    snippet.created_at,
-    snippet.updated_at,
+    [
+      snippet.id,
+      snippet.tenant_id,
+      snippet.name,
+      snippet.body,
+      snippet.scope_all,
+      snippet.created_at,
+      snippet.updated_at,
+    ],
   )
-  setSnippetScope(tenantId, snippet.id, input.agentIds ?? [])
+  await setSnippetScope(tenantId, snippet.id, input.agentIds ?? [])
   return snippet
 }
 
-export function updateSnippet(
+export async function updateSnippet(
   tenantId: string,
   snippetId: string,
   input: { name?: string; body?: string; scopeAll?: boolean; agentIds?: string[] },
-): void {
-  const existing = getSnippet(tenantId, snippetId)
+): Promise<void> {
+  const existing = await getSnippet(tenantId, snippetId)
   if (!existing) return
-  getDb()
-    .prepare(
-      `UPDATE knowledge_snippets SET name = ?, body = ?, scope_all = ?, updated_at = ?
-       WHERE id = ? AND tenant_id = ?`,
-    )
-    .run(
+  await run(
+    `UPDATE knowledge_snippets SET name = ?, body = ?, scope_all = ?, updated_at = ?
+     WHERE id = ? AND tenant_id = ?`,
+    [
       input.name?.trim() || existing.name,
       input.body?.trim() ?? existing.body,
       input.scopeAll === undefined ? existing.scope_all : input.scopeAll ? 1 : 0,
       now(),
       snippetId,
       tenantId,
-    )
-  if (input.agentIds) setSnippetScope(tenantId, snippetId, input.agentIds)
-}
-
-export function deleteSnippet(tenantId: string, snippetId: string): void {
-  getDb()
-    .prepare('DELETE FROM knowledge_snippets WHERE id = ? AND tenant_id = ?')
-    .run(snippetId, tenantId)
-}
-
-function setSnippetScope(tenantId: string, snippetId: string, agentIds: string[]): void {
-  const db = getDb()
-  db.prepare('DELETE FROM knowledge_scopes WHERE snippet_id = ?').run(snippetId)
-  const insert = db.prepare(
-    'INSERT OR IGNORE INTO knowledge_scopes (snippet_id, agent_id) VALUES (?, ?)',
+    ],
   )
+  if (input.agentIds) await setSnippetScope(tenantId, snippetId, input.agentIds)
+}
+
+export async function deleteSnippet(tenantId: string, snippetId: string): Promise<void> {
+  await run('DELETE FROM knowledge_snippets WHERE id = ? AND tenant_id = ?', [snippetId, tenantId])
+}
+
+async function setSnippetScope(
+  tenantId: string,
+  snippetId: string,
+  agentIds: string[],
+): Promise<void> {
+  await run('DELETE FROM knowledge_scopes WHERE snippet_id = ?', [snippetId])
   for (const agentId of agentIds) {
-    const owned = db
-      .prepare('SELECT 1 FROM agents WHERE id = ? AND tenant_id = ?')
-      .get(agentId, tenantId)
-    if (owned) insert.run(snippetId, agentId)
+    const owned = await one('SELECT 1 FROM agents WHERE id = ? AND tenant_id = ?', [
+      agentId,
+      tenantId,
+    ])
+    if (!owned) continue
+    await run(
+      'INSERT INTO knowledge_scopes (snippet_id, agent_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
+      [snippetId, agentId],
+    )
   }
 }
 
-export function listTools(tenantId: string): ToolRow[] {
-  return rows<ToolRow>(
-    getDb()
-      .prepare('SELECT * FROM agent_tools WHERE tenant_id = ? ORDER BY created_at ASC')
-      .all(tenantId),
-  )
+export function listTools(tenantId: string): Promise<ToolRow[]> {
+  return all<ToolRow>('SELECT * FROM agent_tools WHERE tenant_id = ? ORDER BY created_at ASC', [
+    tenantId,
+  ])
 }
 
-export function createTool(
+export async function createTool(
   tenantId: string,
   input: { name: string; description: string; params?: string },
-): ToolRow {
+): Promise<ToolRow> {
   const created = now()
   const tool: ToolRow = {
     id: id('tol'),
@@ -140,12 +141,10 @@ export function createTool(
     created_at: created,
     updated_at: created,
   }
-  getDb()
-    .prepare(
-      `INSERT INTO agent_tools (id, tenant_id, name, description, params_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await run(
+    `INSERT INTO agent_tools (id, tenant_id, name, description, params_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
       tool.id,
       tool.tenant_id,
       tool.name,
@@ -153,25 +152,25 @@ export function createTool(
       tool.params_json,
       tool.created_at,
       tool.updated_at,
-    )
+    ],
+  )
   return tool
 }
 
-export function deleteTool(tenantId: string, toolId: string): void {
-  getDb().prepare('DELETE FROM agent_tools WHERE id = ? AND tenant_id = ?').run(toolId, tenantId)
+export async function deleteTool(tenantId: string, toolId: string): Promise<void> {
+  await run('DELETE FROM agent_tools WHERE id = ? AND tenant_id = ?', [toolId, tenantId])
 }
 
 /** Turns where the model asked for a tool. Reads the existing call_turns.tool. */
-export function countToolIntents(tenantId: string, days = 7): number {
+export async function countToolIntents(tenantId: string, days = 7): Promise<number> {
   const since = now() - days * 24 * 60 * 60 * 1000
-  const found = getDb()
-    .prepare(
-      `SELECT COUNT(*) AS n FROM call_turns t
-       JOIN calls c ON c.id = t.call_id
-       WHERE c.tenant_id = ? AND t.tool IS NOT NULL AND c.started_at >= ?`,
-    )
-    .get(tenantId, since) as { n: number }
-  return Number(found.n) || 0
+  const found = await one<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM call_turns t
+     JOIN calls c ON c.id = t.call_id
+     WHERE c.tenant_id = ? AND t.tool IS NOT NULL AND c.started_at >= ?`,
+    [tenantId, since],
+  )
+  return Number(found?.n) || 0
 }
 
 /** A bad params object must not take the turn down, so it degrades to no params. */
@@ -197,15 +196,15 @@ export interface ResolvedPrompt {
  * this function rather than describing it, so the screen cannot drift from what
  * the turn actually sends.
  */
-export function resolveSystemPrompt(
+export async function resolveSystemPrompt(
   tenantId: string,
   agentId: string,
   basePrompt: string,
-): ResolvedPrompt {
-  const snippets = listSnippets(tenantId).filter(
+): Promise<ResolvedPrompt> {
+  const [allSnippets, tools] = await Promise.all([listSnippets(tenantId), listTools(tenantId)])
+  const snippets = allSnippets.filter(
     (snippet) => snippet.scope_all === 1 || snippet.agentIds.includes(agentId),
   )
-  const tools = listTools(tenantId)
   const toolNames = tools.map((tool) => tool.name)
 
   const kept: SnippetWithScope[] = []

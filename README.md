@@ -7,6 +7,8 @@ watch them run on Indian PSTN, and audit what they said. Implemented from the
 
 ```bash
 pnpm install
+vercel env pull .env.local   # DATABASE_URL for Neon, plus the Clerk keys
+pnpm db:push    # creates the tables, idempotent
 pnpm dev        # http://localhost:3000 — create a workspace at /signup
 pnpm seed       # or: demo tenant, published agent, key pair, live calls
 pnpm session    # a Clerk session cookie for the seeded user, for scripted checks
@@ -17,7 +19,8 @@ pnpm typecheck
 `pnpm seed` creates the demo operator as a real Clerk user, prints the login and a fresh
 API key pair, and drives its calls through the public API so the monitor has real traffic.
 It needs the Clerk development keys in `.env.local`: `clerk env pull --file .env.local`. `SEED_CALLS=40 pnpm seed` fills the grid.
-Local state is `data/voice-studio.db`; deleting it is the supported reset.
+State lives in Neon Postgres, one database shared by local, preview and production, so a
+local delete is a delete for everyone. `pnpm db:push` applies `src/lib/db/schema.sql`.
 
 For the architecture, decision log, unit economics and staged plan, see the CTO
 briefing pack in [`docs/`](./docs/README.md). Working on the code: read
@@ -96,7 +99,7 @@ The campaign table is windowed the same way once a licensed dialer fills it.
 ## Auth, data, and connecting agents
 
 The studio is no longer fixture-driven. Sign up creates a tenant. Agents, keys, calls
-and campaigns live in SQLite at `data/voice-studio.db`. The live monitor subscribes
+and campaigns live in Neon Postgres, reached through `DATABASE_URL`. The live monitor subscribes
 over SSE to real sessions.
 
 Clients (web apps, the embeddable widget, Mac apps) open a session with an API key:

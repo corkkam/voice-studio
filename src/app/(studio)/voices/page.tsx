@@ -6,9 +6,9 @@ import { listVoices } from '@/lib/store/voices'
 
 export default async function VoicesPage() {
   const auth = await requireAuth()
-  const voices = listVoices(auth.tenant.id)
-  const counts = countAgentsByVoice(auth.tenant.id)
-  const agents = listAgentSummaries(auth.tenant.id)
+  const voices = await listVoices(auth.tenant.id)
+  const counts = await countAgentsByVoice(auth.tenant.id)
+  const agents = await listAgentSummaries(auth.tenant.id)
 
   return (
     <>

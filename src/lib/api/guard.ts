@@ -9,17 +9,17 @@ export async function requireOperator() {
   return auth
 }
 
-export function requireApiKey(req: Request): ApiKeyRow | null {
+export async function requireApiKey(req: Request): Promise<ApiKeyRow | null> {
   const raw = bearer(req)
   if (!raw) return null
-  return resolveApiKey(raw) ?? null
+  return (await resolveApiKey(raw)) ?? null
 }
 
 /**
  * Choosing a model spends the tenant's own provider key, so it is a server-side
  * capability: a publishable key sitting in a browser must not reach it.
  */
-export function requireSecretKey(req: Request): ApiKeyRow | null {
-  const key = requireApiKey(req)
+export async function requireSecretKey(req: Request): Promise<ApiKeyRow | null> {
+  const key = await requireApiKey(req)
   return key?.kind === 'secret' ? key : null
 }

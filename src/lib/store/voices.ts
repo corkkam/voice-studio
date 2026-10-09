@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { getDb, now, row, rows } from '@/lib/db'
+import { all, now, one, run } from '@/lib/db'
 import { id } from '@/lib/db/ids'
 import type { VoiceRow } from '@/lib/store/types'
 
@@ -13,37 +13,34 @@ export interface VoiceInput {
   note?: string
 }
 
-export function listVoices(tenantId: string): VoiceRow[] {
-  return rows<VoiceRow>(
-    getDb()
-      .prepare('SELECT * FROM voices WHERE tenant_id = ? ORDER BY is_default DESC, created_at ASC')
-      .all(tenantId),
+export function listVoices(tenantId: string): Promise<VoiceRow[]> {
+  return all<VoiceRow>(
+    'SELECT * FROM voices WHERE tenant_id = ? ORDER BY is_default DESC, created_at ASC',
+    [tenantId],
   )
 }
 
-export function getVoice(tenantId: string, voiceId: string): VoiceRow | undefined {
-  return row<VoiceRow>(
-    getDb().prepare('SELECT * FROM voices WHERE id = ? AND tenant_id = ?').get(voiceId, tenantId),
-  )
+export function getVoice(tenantId: string, voiceId: string): Promise<VoiceRow | undefined> {
+  return one<VoiceRow>('SELECT * FROM voices WHERE id = ? AND tenant_id = ?', [voiceId, tenantId])
 }
 
 /** The preset an agent speaks with, or the tenant default when it has none. */
-export function resolveVoice(tenantId: string, voiceId: string | null): VoiceRow | undefined {
+export async function resolveVoice(
+  tenantId: string,
+  voiceId: string | null,
+): Promise<VoiceRow | undefined> {
   if (voiceId) {
-    const bound = getVoice(tenantId, voiceId)
+    const bound = await getVoice(tenantId, voiceId)
     if (bound) return bound
   }
-  return row<VoiceRow>(
-    getDb()
-      .prepare('SELECT * FROM voices WHERE tenant_id = ? AND is_default = 1 LIMIT 1')
-      .get(tenantId),
-  )
+  return one<VoiceRow>('SELECT * FROM voices WHERE tenant_id = ? AND is_default = 1 LIMIT 1', [
+    tenantId,
+  ])
 }
 
-export function createVoice(tenantId: string, input: VoiceInput): VoiceRow {
-  const db = getDb()
+export async function createVoice(tenantId: string, input: VoiceInput): Promise<VoiceRow> {
   const created = now()
-  const first = !db.prepare('SELECT 1 FROM voices WHERE tenant_id = ? LIMIT 1').get(tenantId)
+  const first = !(await one('SELECT 1 FROM voices WHERE tenant_id = ? LIMIT 1', [tenantId]))
   const voice: VoiceRow = {
     id: id('vce'),
     tenant_id: tenantId,
@@ -59,40 +56,39 @@ export function createVoice(tenantId: string, input: VoiceInput): VoiceRow {
     created_at: created,
     updated_at: created,
   }
-  db.prepare(
+  await run(
     `INSERT INTO voices (
       id, tenant_id, name, locale, family_hint, rate, pitch, note, is_default,
       created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    voice.id,
-    voice.tenant_id,
-    voice.name,
-    voice.locale,
-    voice.family_hint,
-    voice.rate,
-    voice.pitch,
-    voice.note,
-    voice.is_default,
-    voice.created_at,
-    voice.updated_at,
+    [
+      voice.id,
+      voice.tenant_id,
+      voice.name,
+      voice.locale,
+      voice.family_hint,
+      voice.rate,
+      voice.pitch,
+      voice.note,
+      voice.is_default,
+      voice.created_at,
+      voice.updated_at,
+    ],
   )
   return voice
 }
 
-export function updateVoice(
+export async function updateVoice(
   tenantId: string,
   voiceId: string,
   input: VoiceInput,
-): VoiceRow | undefined {
-  const existing = getVoice(tenantId, voiceId)
+): Promise<VoiceRow | undefined> {
+  const existing = await getVoice(tenantId, voiceId)
   if (!existing) return undefined
-  getDb()
-    .prepare(
-      `UPDATE voices SET name = ?, locale = ?, family_hint = ?, rate = ?, pitch = ?,
-       note = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`,
-    )
-    .run(
+  await run(
+    `UPDATE voices SET name = ?, locale = ?, family_hint = ?, rate = ?, pitch = ?,
+     note = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`,
+    [
       input.name.trim() || existing.name,
       (input.locale || existing.locale).trim(),
       (input.familyHint || existing.family_hint).trim(),
@@ -102,41 +98,39 @@ export function updateVoice(
       now(),
       voiceId,
       tenantId,
-    )
+    ],
+  )
   return getVoice(tenantId, voiceId)
 }
 
-export function setDefaultVoice(tenantId: string, voiceId: string): void {
-  const db = getDb()
-  if (!getVoice(tenantId, voiceId)) return
-  db.prepare('UPDATE voices SET is_default = 0 WHERE tenant_id = ?').run(tenantId)
-  db.prepare('UPDATE voices SET is_default = 1, updated_at = ? WHERE id = ? AND tenant_id = ?').run(
+export async function setDefaultVoice(tenantId: string, voiceId: string): Promise<void> {
+  if (!(await getVoice(tenantId, voiceId))) return
+  await run('UPDATE voices SET is_default = 0 WHERE tenant_id = ?', [tenantId])
+  await run('UPDATE voices SET is_default = 1, updated_at = ? WHERE id = ? AND tenant_id = ?', [
     now(),
     voiceId,
     tenantId,
-  )
+  ])
 }
 
 /*
  * Deleting a preset unbinds every agent that used it rather than failing. The
  * agents then fall back to the tenant default through resolveVoice.
  */
-export function deleteVoice(tenantId: string, voiceId: string): void {
-  const db = getDb()
-  const existing = getVoice(tenantId, voiceId)
+export async function deleteVoice(tenantId: string, voiceId: string): Promise<void> {
+  const existing = await getVoice(tenantId, voiceId)
   if (!existing) return
-  db.prepare('UPDATE agents SET voice_id = NULL WHERE tenant_id = ? AND voice_id = ?').run(
+  await run('UPDATE agents SET voice_id = NULL WHERE tenant_id = ? AND voice_id = ?', [
     tenantId,
     voiceId,
-  )
-  db.prepare('DELETE FROM voices WHERE id = ? AND tenant_id = ?').run(voiceId, tenantId)
+  ])
+  await run('DELETE FROM voices WHERE id = ? AND tenant_id = ?', [voiceId, tenantId])
   if (existing.is_default) {
-    const next = row<VoiceRow>(
-      db.prepare('SELECT * FROM voices WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 1').get(
-        tenantId,
-      ),
+    const next = await one<VoiceRow>(
+      'SELECT * FROM voices WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 1',
+      [tenantId],
     )
-    if (next) setDefaultVoice(tenantId, next.id)
+    if (next) await setDefaultVoice(tenantId, next.id)
   }
 }
 

@@ -18,7 +18,7 @@ export default async function AgentBuilderPage({
 }) {
   const auth = await requireAuth()
   const { agentId } = await params
-  const agent = getAgentRow(auth.tenant.id, agentId)
+  const agent = await getAgentRow(auth.tenant.id, agentId)
   if (!agent) notFound()
 
   const pipeline = parsePipeline(agent.pipeline_json)
